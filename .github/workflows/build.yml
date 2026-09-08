@@ -180,3 +180,171 @@ jobs:
           name: Build ${{ github.run_number }}
           files: build/*.apk
           generate_release_notes: true
+
+  # ── Play release ───────────────────────────────────────────────────────────
+  #
+  # Only on a version tag, because this is the artifact that goes to a store
+  # and it should be a deliberate act rather than a side effect of a push.
+  #
+  #   git tag v0.2.0 && git push origin v0.2.0
+  #
+  # Different from the APK job in three ways, all forced by Play:
+  #   - an AAB, not an APK; Google builds the per-device APKs from it
+  #   - the Gradle build, because AAB export is only valid with it - and it is
+  #     also the only way to set target_sdk, which Play requires to be 36 and
+  #     which rises every year
+  #   - signed with the UPLOAD key from a secret, not a per-run throwaway
+  play:
+    name: Build the Play bundle
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.7.2
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install the export templates
+        run: |
+          mkdir -p ~/.local/share/godot/export_templates
+          mv /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable \
+             ~/.local/share/godot/export_templates/ 2>/dev/null || true
+
+      # The Gradle build pulls ~300 MB on a cold run. Cached, later runs are
+      # minutes faster and do not depend on Gradle's CDN being reachable.
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('export_presets.cfg') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Locate or install the Android SDK
+        run: |
+          set -e
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -z "$SDK" ]; then
+            for c in /usr/lib/android-sdk /opt/android-sdk /opt/android /root/android-sdk /usr/local/lib/android/sdk; do
+              if [ -d "$c" ]; then SDK="$c"; break; fi
+            done
+          fi
+          if [ -z "$SDK" ] || [ ! -d "$SDK/platform-tools" ] || [ ! -d "$SDK/build-tools" ]; then
+            SDK=/opt/android-sdk
+            mkdir -p "$SDK/cmdline-tools"
+            curl -fsSL -o /tmp/cmdline-tools.zip \
+              https://dl.google.com/android/repository/commandlinetools-linux-16111833_latest.zip
+            unzip -q /tmp/cmdline-tools.zip -d /tmp/clt
+            mv /tmp/clt/cmdline-tools "$SDK/cmdline-tools/latest"
+            yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" \
+              "platform-tools" "platforms;android-36" "build-tools;36.0.0" >/dev/null
+          fi
+          JDK="${JAVA_HOME:-}"
+          if [ -z "$JDK" ]; then
+            JDK=$(dirname "$(dirname "$(readlink -f "$(command -v javac || command -v java)")")")
+          fi
+          echo "SDK=$SDK"; echo "JDK=$JDK"
+          test -d "$SDK/platform-tools" || { echo "no platform-tools under $SDK"; exit 1; }
+          test -x "$JDK/bin/java"      || { echo "no java under $JDK"; exit 1; }
+          echo "ANDROID_SDK=$SDK" >> "$GITHUB_ENV"
+          echo "JDK_PATH=$JDK"    >> "$GITHUB_ENV"
+
+      - name: Point Godot at the SDK
+        run: |
+          set -e
+          mkdir -p ~/.config/godot
+          SETTINGS=~/.config/godot/editor_settings-4.7.tres
+          if [ ! -f "$SETTINGS" ]; then
+            printf '[gd_resource type="EditorSettings" format=3]\n\n[resource]\n' > "$SETTINGS"
+          fi
+          cat >> "$SETTINGS" <<EOF
+          export/android/android_sdk_path = "$ANDROID_SDK"
+          export/android/java_sdk_path = "$JDK_PATH"
+          EOF
+
+      - name: Write the upload keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "ANDROID_UPLOAD_KEYSTORE_B64 is not set."
+            echo "A Play bundle cannot be signed with a throwaway key - Play"
+            echo "rejects an upload whose signature does not match the app."
+            echo "See PLAY.md for which secrets to add."
+            exit 1
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > /tmp/upload.keystore
+          test -s /tmp/upload.keystore
+
+      - name: Stamp the build
+        run: |
+          set -e
+          SHA=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          BUILT=$(date -u '+%Y-%m-%d %H:%M UTC')
+          sed -i "s/const SHA := \"[^\"]*\"/const SHA := \"${SHA}\"/" src/build_stamp.gd
+          sed -i "s/const BUILT := \"[^\"]*\"/const BUILT := \"${BUILT}\"/" src/build_stamp.gd
+          grep -q 'const SHA := "dev"' src/build_stamp.gd && { echo "stamp did not apply"; exit 1; }
+          grep 'const ' src/build_stamp.gd
+
+      # The release keystore is read from these environment variables rather
+      # than from editor settings. Godot falls back to editor settings for the
+      # DEBUG key only; a release export with no preset keystore and no env
+      # vars fails with "Could not find release keystore", which reads like a
+      # missing file rather than a missing setting.
+      #
+      # This is also the right shape for CI regardless: the password never
+      # touches a committed file.
+      - name: Export the Play bundle
+        env:
+          GODOT_ANDROID_KEYSTORE_RELEASE_PATH: /tmp/upload.keystore
+          GODOT_ANDROID_KEYSTORE_RELEASE_USER: upload
+          GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
+        run: |
+          set -e
+          godot --headless --import
+          mkdir -p build
+          # --install-android-build-template only works alongside an export
+          # command; on its own it opens the editor and never returns.
+          godot --headless --install-android-build-template \
+                --export-release "Android Release" build/godot-template.aab
+          ls -la build/
+
+      # Play's target API requirement rises every year and an upload below it
+      # is rejected. Checking it here turns a yearly thing to remember into a
+      # yearly build failure with a clear message.
+      # Read from android/build/config.gradle, which is what the build actually
+      # consumed, rather than from the bundle. An AAB's manifest is protobuf,
+      # not binary XML, so `aapt2 dump xmltree` cannot read it and silently
+      # produces nothing - a check that passes on an empty string is worse than
+      # no check.
+      - name: Verify the target SDK
+        run: |
+          set -e
+          REQUIRED=36   # Play, for new apps and updates from 31 August 2026
+          TARGET=$(grep -oP 'targetSdk\s*:\s*\K[0-9]+' android/build/config.gradle | head -1)
+          MIN=$(grep -oP 'minSdk\s*:\s*\K[0-9]+' android/build/config.gradle | head -1)
+          echo "targetSdk=$TARGET  minSdk=$MIN  (Play requires >= $REQUIRED)"
+          test -n "$TARGET" || { echo "could not read targetSdk from config.gradle"; exit 1; }
+          if [ "$TARGET" -lt "$REQUIRED" ]; then
+            echo ""
+            echo "Play will reject this upload. Raise gradle_build/target_sdk in"
+            echo "export_presets.cfg. This requirement rises every year - see PLAY.md."
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aab
+          path: build/*.aab
+          retention-days: 90
+
+      # Attached to the tag's release, not to a rolling build number - this is
+      # the file that gets uploaded to Play Console by hand.
+      - name: Attach the bundle to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/*.aab
+          generate_release_notes: true

@@ -93,6 +93,34 @@ something to read.
 - **Freeze before advancing** in any harness, or results move with the speed of the
   machine.
 
+## Signing, and the two builds
+
+There are two export presets and they are not interchangeable.
+
+| | `Android` | `Android Release` |
+|---|---|---|
+| Output | `.apk` | `.aab` (what Play accepts) |
+| Build | prebuilt template, seconds, no Gradle | Gradle build, minutes, ~300 MB of downloads on a cold run |
+| Signed with | debug key | **upload key**, from `C:\dev\keys\upload.keystore` |
+| Trigger | every push | a `v*` tag |
+
+- **AAB export is only valid with `gradle_build/use_gradle_build=true`.** The exporter
+  refuses otherwise, and the Gradle build is also the only way to set `target_sdk`, which
+  Play requires to be 36 and which rises every year.
+- **`--install-android-build-template` only works alongside an export command.** On its own
+  it opens the editor and never returns — it burns CPU and produces nothing, which looks
+  like a hang.
+- **The release keystore comes from environment variables**, not editor settings:
+  `GODOT_ANDROID_KEYSTORE_RELEASE_PATH` / `_USER` / `_PASSWORD`. Godot falls back to editor
+  settings for the *debug* key only, so a release export without them fails with
+  "Could not find release keystore" — which reads like a missing file rather than a missing
+  setting. The env vars are the right shape for CI anyway: the password never touches a
+  committed file.
+- **Keys live in `C:\dev\keys`**, outside every repository, and `android/` is gitignored
+  because it is the export template unpacked, not source.
+- See `PLAY.md` in `gamedev-notes` for the store side, and `PRIVACY.md` here for the policy
+  every Play listing requires even when nothing is collected.
+
 ## Things the exporter will not tell you clearly
 
 - `rendering/textures/vram_compression/import_etc2_astc=true` is **required** for an
