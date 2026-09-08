@@ -54,60 +54,104 @@ jobs:
       - name: Install the export templates
         run: |
           mkdir -p ~/.local/share/godot/export_templates
-          mv /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable ~/.local/share/godot/export_templates/ || true
+          mv /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable \
+             ~/.local/share/godot/export_templates/ 2>/dev/null || true
           ls ~/.local/share/godot/export_templates/
 
-      # Signing material never lives in the repo. The keystore is stored as a
-      # base64 repository secret and written to disk only for the length of
-      # this job.
+      # Find the SDK and JDK the image ships, or install what is missing.
+      #
+      # Written to report rather than assume: the first version of this step
+      # hard-coded /usr/lib/android-sdk and used python3, which is not in this
+      # image - the whole job failed with "exit code 127" and nothing else,
+      # which says nothing at all about what was wrong.
+      - name: Locate or install the Android SDK
+        run: |
+          set -e
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -z "$SDK" ]; then
+            for c in /usr/lib/android-sdk /opt/android-sdk /opt/android /root/android-sdk /usr/local/lib/android/sdk; do
+              if [ -d "$c" ]; then SDK="$c"; break; fi
+            done
+          fi
+          if [ -z "$SDK" ] || [ ! -d "$SDK/platform-tools" ] || [ ! -d "$SDK/build-tools" ]; then
+            echo "No usable Android SDK found (SDK='$SDK'); installing one."
+            SDK=/opt/android-sdk
+            mkdir -p "$SDK/cmdline-tools"
+            curl -fsSL -o /tmp/cmdline-tools.zip \
+              https://dl.google.com/android/repository/commandlinetools-linux-16111833_latest.zip
+            unzip -q /tmp/cmdline-tools.zip -d /tmp/clt
+            mv /tmp/clt/cmdline-tools "$SDK/cmdline-tools/latest"
+            yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" \
+              "platform-tools" "platforms;android-36" "build-tools;36.0.0" >/dev/null
+          fi
+          JDK="${JAVA_HOME:-}"
+          if [ -z "$JDK" ]; then
+            JDK=$(dirname "$(dirname "$(readlink -f "$(command -v javac || command -v java)")")")
+          fi
+          echo "SDK=$SDK"
+          echo "JDK=$JDK"
+          ls "$SDK"
+          test -d "$SDK/platform-tools" || { echo "still no platform-tools"; exit 1; }
+          test -d "$SDK/build-tools"   || { echo "still no build-tools"; exit 1; }
+          test -x "$JDK/bin/java"      || { echo "no java under $JDK"; exit 1; }
+          echo "ANDROID_SDK=$SDK" >> "$GITHUB_ENV"
+          echo "JDK_PATH=$JDK"    >> "$GITHUB_ENV"
+
+      # Signing material never lives in the repo. The keystore comes from a
+      # base64 repository secret and is written to disk only for this job. With
+      # no secret set, a throwaway debug key is generated - fine for an APK you
+      # sideload, never for anything going to Play.
       - name: Write the debug keystore
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
         run: |
           if [ -z "$KEYSTORE_B64" ]; then
-            echo "ANDROID_DEBUG_KEYSTORE_B64 is not set - generating a throwaway debug key"
-            keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android \
-              -keystore /tmp/debug.keystore -storepass android \
+            echo "ANDROID_DEBUG_KEYSTORE_B64 not set - generating a throwaway debug key"
+            "$JDK_PATH/bin/keytool" -keyalg RSA -genkeypair -alias androiddebugkey \
+              -keypass android -keystore /tmp/debug.keystore -storepass android \
               -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
           else
             echo "$KEYSTORE_B64" | base64 -d > /tmp/debug.keystore
           fi
+          test -s /tmp/debug.keystore
 
+      # Godot finds all three of these through EDITOR SETTINGS, not through
+      # environment variables. Setting ANDROID_HOME alone does nothing, and the
+      # error message names "Editor Settings" without saying which file.
       - name: Point Godot at the SDK and the keystore
         run: |
+          set -e
           mkdir -p ~/.config/godot
-          cat >> ~/.config/godot/editor_settings-4.7.tres <<'EOF'
+          SETTINGS=~/.config/godot/editor_settings-4.7.tres
+          if [ ! -f "$SETTINGS" ]; then
+            printf '[gd_resource type="EditorSettings" format=3]\n\n[resource]\n' > "$SETTINGS"
+          fi
+          cat >> "$SETTINGS" <<EOF
+          export/android/android_sdk_path = "$ANDROID_SDK"
+          export/android/java_sdk_path = "$JDK_PATH"
+          export/android/debug_keystore = "/tmp/debug.keystore"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
           EOF
-          python3 - <<'PY'
-          import os, pathlib
-          p = pathlib.Path(os.path.expanduser("~/.config/godot/editor_settings-4.7.tres"))
-          body = p.read_text() if p.exists() else ""
-          if "[resource]" not in body:
-              body = '[gd_resource type="EditorSettings" format=3]\n\n[resource]\n'
-          body += (
-              '\nexport/android/android_sdk_path = "%s"' % os.environ.get("ANDROID_HOME", "/usr/lib/android-sdk")
-              + '\nexport/android/java_sdk_path = "%s"' % os.environ.get("JAVA_HOME", "/usr/lib/jvm/default-java")
-              + '\nexport/android/debug_keystore = "/tmp/debug.keystore"'
-              + '\nexport/android/debug_keystore_user = "androiddebugkey"'
-              + '\nexport/android/debug_keystore_pass = "android"\n'
-          )
-          p.write_text(body)
-          print(body)
-          PY
+          cat "$SETTINGS"
 
       # The stamp is the only way to tell on a phone whether the build you are
       # holding is the build you just made.
       - name: Stamp the build
         run: |
+          set -e
           SHA=$(echo "${GITHUB_SHA}" | cut -c1-7)
           BUILT=$(date -u '+%Y-%m-%d %H:%M UTC')
           sed -i "s/const SHA := \"[^\"]*\"/const SHA := \"${SHA}\"/" src/build_stamp.gd
           sed -i "s/const BUILT := \"[^\"]*\"/const BUILT := \"${BUILT}\"/" src/build_stamp.gd
-          grep -q 'const SHA := "dev"' src/build_stamp.gd && { echo "stamp did not apply"; exit 1; }
-          cat src/build_stamp.gd | grep 'const '
+          if grep -q 'const SHA := "dev"' src/build_stamp.gd; then
+            echo "the stamp did not apply"; exit 1
+          fi
+          grep 'const ' src/build_stamp.gd
 
       - name: Export the APK
         run: |
+          set -e
           godot --headless --import
           mkdir -p build
           godot --headless --export-debug "Android" build/godot-template.apk
@@ -119,9 +163,11 @@ jobs:
         run: godot --headless --script res://scripts/check_size.gd
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: apk
           path: build/*.apk
+          if-no-files-found: ignore
           retention-days: 30
 
       # A release per push to main, so there is always a link to tap on the
