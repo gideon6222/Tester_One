@@ -19,17 +19,24 @@ is committed to it.
 
 ## What is proven, as of 2026-09-08
 
+The whole chain, end to end, with nothing left on trust:
+
 - Godot 4.7.2 runs headless on Windows and exits non-zero on a failed script.
 - 28 pure tests, ~4,400 assertions, about a second, no display.
 - A whole-run golden over two policies (passive and dodging), **verified by deliberately
   breaking it**: changing one tuning constant made it fail and name the exact field.
 - A smoke test that boots the real scene headlessly and compares drawn instances against
   the model.
-- A signed 27 MB debug APK, exported from the command line.
+- A signed 26.98 MB debug APK, exported from the command line.
 - A size guard that fails in both directions.
-
-Not yet proven: installing on the phone (no device was connected), and the CI workflow
-running green on a real runner.
+- **CI green on a real runner** — tests, toolchain discovery, stamp, export, size guard,
+  and an APK attached to a GitHub Release.
+- **Installed and running on the S26 Ultra.** Vulkan 1.4.295, Forward Mobile, Adreno 840.
+  `dumpsys gfxinfo` over the first 44 frames: **50th/90th/95th percentile all 5 ms**, one
+  janky frame, GPU 1 ms at the median. On a placeholder scene, so it measures the engine
+  and the pipeline rather than a game — but it is the number to compare future ones to.
+- The stamp on the phone read back the exact commit that had just been pushed, which is
+  the whole point of it.
 
 ## The test harness is hand-written, deliberately
 
@@ -57,22 +64,22 @@ Worth knowing before writing any other headless harness in Godot:
 
 ## Known gaps / next
 
-1. **Nothing has been installed on a phone yet.** `adb devices` was empty. Plug the S26
-   in with USB debugging on and `adb install -r build/godot-template.apk`.
-2. **CI has never run.** The workflow is written against `barichello/godot-ci:4.7.2` but
-   has not been executed; expect the editor-settings step to need adjusting for the
-   container's SDK and JDK paths.
-3. **Target API level is whatever the prebuilt export template targets.** Play requires
+1. **Target API level is whatever the prebuilt export template targets.** Play requires
    API 36 for new apps and updates from 31 August 2026. Verify with
    `aapt dump badging build/*.apk | grep targetSdk` before any store submission, and turn
    on `gradle_build/use_gradle_build` if it needs overriding.
-4. **The game is a placeholder.** A track, one obstacle kind, one pickup kind. It exists
+2. **The game is a placeholder.** A track, one obstacle kind, one pickup kind. It exists
    so the golden has something to be golden about. Do not grow it — copy the repo and
    grow the copy.
-5. **No release keystore.** The debug key is fine for sideloading and for internal
+3. **No release keystore.** The debug key is fine for sideloading and for internal
    testing; a Play production release needs a real upload key, and Play App Signing
    should be enabled so losing it is recoverable.
-6. **No audio.** The web games synthesised everything at runtime. Godot has `AudioStream`
+4. **CI generates a throwaway debug key every run**, so every build is signed by a
+   different key and Android will refuse to update an installed app in place. Fine while
+   the APK is a proof; before this matters, set `ANDROID_DEBUG_KEYSTORE_B64` as a
+   repository secret from `C:\dev\toolchain\debug.keystore` and every build will share one
+   identity.
+5. **No audio.** The web games synthesised everything at runtime. Godot has `AudioStream`
    and a real mixer; decide per game whether to synthesise or ship files, and record the
    answer in `ASSETS.md`.
 
