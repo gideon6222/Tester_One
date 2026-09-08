@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- Placeholder icon: the road, the player, one obstacle. Replace it per
+       game - the launcher icon is the only part of a phone game a player sees
+       before they decide whether to open it. -->
+  <rect width="128" height="128" fill="#5c9ed1"/>
+  <path d="M40 128 L56 44 L72 44 L88 128 Z" fill="#8c8478"/>
+  <path d="M62 118 L66 118 L66 104 L62 104 Z M62 96 L66 96 L66 82 L62 82 Z M63 74 L65 74 L65 62 L63 62 Z" fill="#e8e4dc"/>
+  <rect x="54" y="94" width="20" height="20" rx="3" fill="#fbcc40"/>
+  <rect x="70" y="60" width="14" height="14" rx="3" fill="#b83d4c"/>
+</svg>

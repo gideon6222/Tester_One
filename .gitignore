@@ -1,0 +1,15 @@
+# Godot's import cache and per-machine editor state. Regenerated on open.
+.godot/
+.import/
+
+# Export output.
+build/
+*.apk
+*.aab
+*.idsig
+
+# Never commit signing material. The debug keystore is universally known and
+# still does not belong here; the release keystore would be a real key leak.
+*.keystore
+*.jks
+*.p12

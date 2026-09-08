@@ -1,0 +1,136 @@
+name: Test and build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to attach the APK to a release
+
+env:
+  GODOT_VERSION: 4.7.2
+
+jobs:
+  test:
+    name: Headless tests
+    runs-on: ubuntu-latest
+    # The engine version is pinned to the same one the game is developed
+    # against. Lighting, physics defaults and export template behaviour all
+    # move between minor releases; a floating version means CI is testing a
+    # different game from the one on the desk.
+    container:
+      image: barichello/godot-ci:4.7.2
+    steps:
+      - uses: actions/checkout@v5
+
+      # Godot writes its import cache on first open. Doing it as its own step
+      # means a failure here reads as "the project does not import" rather than
+      # as a mysterious test failure.
+      - name: Import the project
+        run: godot --headless --import
+
+      # Pure: no window, no GPU, no scene tree. About a second.
+      - name: Unit and golden tests
+        run: godot --headless --script res://test/run_tests.gd
+
+      # Boots the real scene. Catches what the pure tests structurally cannot -
+      # a scene that fails to build, a node never added, a render path that
+      # stopped being flushed.
+      - name: Smoke test
+        run: godot --headless --script res://test/run_smoke.gd
+
+  android:
+    name: Build the APK
+    needs: test
+    runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.7.2
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # the stamp wants a real sha
+
+      - name: Install the export templates
+        run: |
+          mkdir -p ~/.local/share/godot/export_templates
+          mv /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable ~/.local/share/godot/export_templates/ || true
+          ls ~/.local/share/godot/export_templates/
+
+      # Signing material never lives in the repo. The keystore is stored as a
+      # base64 repository secret and written to disk only for the length of
+      # this job.
+      - name: Write the debug keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "ANDROID_DEBUG_KEYSTORE_B64 is not set - generating a throwaway debug key"
+            keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android \
+              -keystore /tmp/debug.keystore -storepass android \
+              -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
+          else
+            echo "$KEYSTORE_B64" | base64 -d > /tmp/debug.keystore
+          fi
+
+      - name: Point Godot at the SDK and the keystore
+        run: |
+          mkdir -p ~/.config/godot
+          cat >> ~/.config/godot/editor_settings-4.7.tres <<'EOF'
+          EOF
+          python3 - <<'PY'
+          import os, pathlib
+          p = pathlib.Path(os.path.expanduser("~/.config/godot/editor_settings-4.7.tres"))
+          body = p.read_text() if p.exists() else ""
+          if "[resource]" not in body:
+              body = '[gd_resource type="EditorSettings" format=3]\n\n[resource]\n'
+          body += (
+              '\nexport/android/android_sdk_path = "%s"' % os.environ.get("ANDROID_HOME", "/usr/lib/android-sdk")
+              + '\nexport/android/java_sdk_path = "%s"' % os.environ.get("JAVA_HOME", "/usr/lib/jvm/default-java")
+              + '\nexport/android/debug_keystore = "/tmp/debug.keystore"'
+              + '\nexport/android/debug_keystore_user = "androiddebugkey"'
+              + '\nexport/android/debug_keystore_pass = "android"\n'
+          )
+          p.write_text(body)
+          print(body)
+          PY
+
+      # The stamp is the only way to tell on a phone whether the build you are
+      # holding is the build you just made.
+      - name: Stamp the build
+        run: |
+          SHA=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          BUILT=$(date -u '+%Y-%m-%d %H:%M UTC')
+          sed -i "s/const SHA := \"[^\"]*\"/const SHA := \"${SHA}\"/" src/build_stamp.gd
+          sed -i "s/const BUILT := \"[^\"]*\"/const BUILT := \"${BUILT}\"/" src/build_stamp.gd
+          grep -q 'const SHA := "dev"' src/build_stamp.gd && { echo "stamp did not apply"; exit 1; }
+          cat src/build_stamp.gd | grep 'const '
+
+      - name: Export the APK
+        run: |
+          godot --headless --import
+          mkdir -p build
+          godot --headless --export-debug "Android" build/godot-template.apk
+          ls -la build/
+
+      # Fails in both directions. A build that shrinks for no reason has lost
+      # something - see the note at the top of the script.
+      - name: Size guard
+        run: godot --headless --script res://scripts/check_size.gd
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: build/*.apk
+          retention-days: 30
+
+      # A release per push to main, so there is always a link to tap on the
+      # phone rather than an artifact that needs a login to download.
+      - name: Publish a release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Build ${{ github.run_number }}
+          files: build/*.apk
+          generate_release_notes: true

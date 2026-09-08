@@ -1,0 +1,25 @@
+# LF in the repository, always.
+#
+# Without this, git core.autocrlf rewrites text files on checkout and anything
+# that compares recorded text - a golden baseline, a stamped file - differs
+# between a Windows working copy and a Linux CI runner. That has broken a test
+# suite on a fresh clone before.
+* text=auto eol=lf
+
+# Godot's own text formats, so a diff is readable in review.
+*.gd      text eol=lf
+*.tscn    text eol=lf
+*.tres    text eol=lf
+*.godot   text eol=lf
+*.cfg     text eol=lf
+*.json    text eol=lf
+
+# Binary, so git does not try to merge them.
+*.png     binary
+*.jpg     binary
+*.webp    binary
+*.ogg     binary
+*.wav     binary
+*.glb     binary
+*.apk     binary
+*.aab     binary
