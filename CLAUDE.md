@@ -116,6 +116,19 @@ There are two export presets and they are not interchangeable.
   "Could not find release keystore" — which reads like a missing file rather than a missing
   setting. The env vars are the right shape for CI anyway: the password never touches a
   committed file.
+- **Set `GRADLE_OPTS=-Dorg.gradle.daemon=false` for any release export.** Without it Godot
+  writes a perfectly good bundle and then **never exits** — Gradle forks a daemon that
+  outlives the build and Godot waits on it. Measured: 0% CPU for eight minutes with the AAB
+  already on disk. With the daemon off it exits 0. In CI that difference is a job that
+  burns until the timeout with nothing actually wrong.
+- **Verify the artifact, not the exit code.** This export has returned -1 while producing a
+  valid bundle, and returned 0 while producing nothing. Check the file exists, is a
+  plausible size, and passes `jarsigner -verify`.
+- **Do not invoke it through PowerShell's `Start-Process -ArgumentList`.** It joins
+  arguments without quoting, so the preset name `Android Release` arrives as two arguments
+  and Godot exports the *`Android`* preset to a file called `Release` — which fails with
+  `Invalid filename! Android APK requires the *.apk extension`, a message about nothing to
+  do with the mistake. `scripts/export_release.bat` exists to pass the quotes through.
 - **Keys live in `C:\dev\keys`**, outside every repository, and `android/` is gitignored
   because it is the export template unpacked, not source.
 - See `PLAY.md` in `gamedev-notes` for the store side, and `PRIVACY.md` here for the policy

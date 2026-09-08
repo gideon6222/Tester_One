@@ -302,15 +302,42 @@ jobs:
           GODOT_ANDROID_KEYSTORE_RELEASE_PATH: /tmp/upload.keystore
           GODOT_ANDROID_KEYSTORE_RELEASE_USER: upload
           GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
+          # Without this, Godot writes a perfectly good bundle and then never
+          # exits: Gradle forks a daemon that outlives the build and Godot
+          # waits on it. Measured - the process sat at 0% CPU for eight minutes
+          # with the AAB already on disk, which in CI is a job that burns until
+          # the timeout with nothing wrong. With the daemon off it exits 0.
+          GRADLE_OPTS: -Dorg.gradle.daemon=false
         run: |
           set -e
           godot --headless --import
           mkdir -p build
           # --install-android-build-template only works alongside an export
           # command; on its own it opens the editor and never returns.
-          godot --headless --install-android-build-template \
+          #
+          # Bounded, because a hang here is the failure mode this step has
+          # already had once. Twenty minutes is generous for a cold Gradle run.
+          timeout 20m godot --headless --install-android-build-template \
                 --export-release "Android Release" build/godot-template.aab
           ls -la build/
+
+      # Verify the artifact, not the exit code.
+      #
+      # Godot's release export has returned -1 while producing a valid bundle,
+      # and returned 0 while producing nothing when a preset name with a space
+      # was split by the caller. Neither the presence of a file nor an exit
+      # code is sufficient alone; this checks the thing that actually matters.
+      - name: Verify the bundle
+        run: |
+          set -e
+          AAB=build/godot-template.aab
+          test -f "$AAB" || { echo "no bundle was produced"; exit 1; }
+          SIZE=$(stat -c%s "$AAB")
+          echo "bundle is $SIZE bytes"
+          # A Godot AAB is ~25 MB; anything under 5 MB is not a real bundle.
+          test "$SIZE" -gt 5000000 || { echo "bundle is implausibly small"; exit 1; }
+          "$JDK_PATH/bin/jarsigner" -verify "$AAB" | tee /tmp/verify.txt
+          grep -q "jar verified" /tmp/verify.txt || { echo "bundle is not signed"; exit 1; }
 
       # Play's target API requirement rises every year and an upload below it
       # is rejected. Checking it here turns a yearly thing to remember into a
