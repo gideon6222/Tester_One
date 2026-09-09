@@ -71,6 +71,23 @@ func restart(start_level: int = 1) -> void:
 	_chunk_spawned = -1
 
 
+## The next level, keeping what the RUN owns rather than what the LEVEL owns.
+##
+## **This function is why the template has it at all.** A game built from an
+## earlier version of this repo emitted `level_finished` and had nothing
+## connected to it - so `over` went true at the end of the first level,
+## `advance()` returned early from then on, and the game sat frozen with a live
+## HUD. To the person holding the phone that is indistinguishable from a crash,
+## and it was the first thing they hit.
+##
+## Decide deliberately what carries across: score usually does, lives and
+## position usually do not.
+func next_level() -> void:
+	var carried := score
+	restart(level + 1)
+	score = carried
+
+
 ## One step. `dt` is seconds; the caller decides whether that came from a real
 ## frame or from a test stepping at a fixed rate, and the result is identical
 ## either way.

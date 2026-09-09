@@ -56,6 +56,29 @@ func lt(actual: float, bound: float, msg: String) -> void:
 		_fail("%s (expected < %s, got %s)" % [msg, str(bound), str(actual)])
 
 
+## How close two floats have to be to count as the same in a golden.
+##
+## Not a fudge factor, and it took a failure that read "expected -0.825, got
+## -0.825" to justify it. `snappedf(x, 0.001)` produces a double near -0.825
+## whose last bits are not the ones the literal `-0.825` parses to, so a
+## recorded golden can never match the run it was recorded from - the test is
+## unpassable by construction and says nothing about why.
+##
+## It earns its place a second time in CI. Goldens are recorded on Windows and
+## checked on a Linux runner, and identical IEEE arithmetic across two
+## toolchains is something people assume rather than something promised. A
+## tolerance a thousand times finer than the snap cannot hide a behaviour
+## change - the simulation would have to differ by less than a micron - and it
+## stops the whole suite becoming a platform detector.
+const FLOAT_EPS := 1e-6
+
+
+func _same(a: Variant, b: Variant) -> bool:
+	if a is float and b is float:
+		return absf(a - b) <= FLOAT_EPS
+	return a == b
+
+
 ## Compares two dictionaries field by field and reports every difference, not
 ## just the first. A golden that stops at the first mismatch turns one run into
 ## one bug found; this turns it into all of them.
@@ -65,7 +88,7 @@ func dict_eq(actual: Dictionary, expected: Dictionary, msg: String) -> void:
 	for k in expected.keys():
 		if not actual.has(k):
 			diffs.append("  %s: MISSING (expected %s)" % [k, str(expected[k])])
-		elif actual[k] != expected[k]:
+		elif not _same(actual[k], expected[k]):
 			diffs.append("  %s: expected %s, got %s" % [k, str(expected[k]), str(actual[k])])
 	for k in actual.keys():
 		if not expected.has(k):

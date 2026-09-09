@@ -25,7 +25,22 @@ var _player: MeshInstance3D
 var _obstacles: MultiMeshInstance3D
 var _pickups: MultiMeshInstance3D
 var _hud: Label
+var _ui: Control
+var _pad: Control
+var _pad_grab := -1
+var _pad_vec := Vector2.ZERO
 var _dragging := false
+
+## Big enough for a thumb without looking at it, and clear of the bottom edge so
+## the system gesture bar cannot eat the press.
+const PAD := 210.0
+const PAD_BOTTOM := 200.0
+
+## Long enough to read what happened, short enough that it never feels like a
+## menu. The game is playable again on the other side of it without a tap.
+const INTERLUDE_SECONDS := 2.2
+var _interlude := 0.0
+var _interlude_won := false
 
 ## Set by the headless harness. When true the frame loop does not step the sim,
 ## so `advance()` is the only thing moving time and results do not depend on
@@ -57,6 +72,7 @@ func _ensure_booted() -> void:
 	_booted = true
 	sim = Sim.new()
 	_build_world()
+	sim.level_finished.connect(_on_level_finished)
 	_sync()
 
 
@@ -107,15 +123,113 @@ func _build_world() -> void:
 	_obstacles = _make_multimesh(Vector3(1.2, 1.2, 1.2), Color(0.72, 0.24, 0.30))
 	_pickups = _make_multimesh(Vector3(0.55, 0.55, 0.55), Color(0.35, 0.85, 0.95))
 
+	_build_hud()
+
+
+## THE LAYOUT RULE, and it is here because getting it wrong has shipped.
+##
+## `window/stretch/aspect = "expand"` keeps the base WIDTH and extends the
+## HEIGHT to the device's aspect. The base here is 1080x1920; the phone is about
+## 19.5:9, so the canvas the game renders into is roughly 1080x2340. **Laying
+## anything out against the literal number 1920 therefore puts it hundreds of
+## pixels above where it belongs**, and the player's report was "the icons are
+## about half an inch too high".
+##
+## It shipped alongside a second bug of the same origin: a hand-rolled hit test
+## that scaled touches into a 1080x1920 space of its own, so the drawn control
+## and the region that responded were in two different coordinate systems and
+## disagreed with each other as well as with the screen.
+##
+## So, for every game built from this template:
+##
+##   - One `Control` with `PRESET_FULL_RECT` inside the `CanvasLayer`, and
+##     **everything anchors to that**. `PRESET_CENTER_BOTTOM` with a negative
+##     `offset_bottom` puts a thumb control a fixed distance from the real
+##     bottom edge at any aspect ratio.
+##   - **Every interactive control handles its own input** through `_gui_input`
+##     and calls `accept_event()`. Position and hit box are then the same object
+##     and cannot drift apart. A manual hit test in `_unhandled_input` is a
+##     second source of truth for where a button is.
+##
+## **No headless test can catch this**, which is the part worth remembering: a
+## headless run uses the base viewport size, where the wrong layout and the
+## right one are identical. Screenshot at the phone's aspect (see
+## `scripts/shot.gd`), and have the smoke test assert the PROPERTY - that the
+## control resolves from the viewport edge - rather than its position.
+func _build_hud() -> void:
 	var layer := CanvasLayer.new()
+	layer.name = "Hud"
 	add_child(layer)
+
+	_ui = Control.new()
+	_ui.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ui.name = "Ui"
+	layer.add_child(_ui)
+
 	_hud = Label.new()
-	_hud.position = Vector2(24, 24)
+	_hud.position = Vector2(46, 52)
 	_hud.add_theme_font_size_override("font_size", 34)
 	_hud.add_theme_color_override("font_color", Color.WHITE)
 	_hud.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.7))
 	_hud.add_theme_constant_override("outline_size", 8)
-	layer.add_child(_hud)
+	_ui.add_child(_hud)
+
+	# A thumb control, anchored rather than placed - here so the pattern is
+	# already in the file and the smoke test has something real to assert
+	# against. Replace what it DOES; keep how it is positioned.
+	_pad = Control.new()
+	_pad.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_pad.custom_minimum_size = Vector2(PAD, PAD)
+	_pad.size = Vector2(PAD, PAD)
+	_pad.offset_left = -PAD * 0.5
+	_pad.offset_right = PAD * 0.5
+	_pad.offset_top = -PAD - PAD_BOTTOM
+	_pad.offset_bottom = -PAD_BOTTOM
+	_pad.mouse_filter = Control.MOUSE_FILTER_STOP
+	_pad.name = "Pad"
+	_pad.gui_input.connect(_on_pad_input)
+	_pad.draw.connect(_draw_pad)
+	_ui.add_child(_pad)
+
+
+func _draw_pad() -> void:
+	var r := PAD * 0.5
+	var c := Vector2(r, r)
+	var lit: float = 0.6 if _pad_grab >= 0 else 0.3
+	_pad.draw_circle(c, r, Color(0.05, 0.05, 0.06, 0.32))
+	_pad.draw_arc(c, r - 4.0, 0.0, TAU, 48, Color(1.0, 0.86, 0.42, lit), 4.0)
+	_pad.draw_circle(c + _pad_vec * (r * 0.55), r * 0.28, Color(0.95, 0.85, 0.55, 0.85))
+
+
+func _on_pad_input(event: InputEvent) -> void:
+	if event is InputEventScreenTouch or event is InputEventMouseButton:
+		if event.pressed:
+			_pad_grab = event.index if event is InputEventScreenTouch else 0
+			_read_pad(event.position)
+		else:
+			_pad_grab = -1
+			_pad_vec = Vector2.ZERO
+		_pad.accept_event()
+	elif event is InputEventScreenDrag or event is InputEventMouseMotion:
+		if _pad_grab >= 0:
+			_read_pad(event.position)
+			_pad.accept_event()
+
+
+## Absolute, not relative: on a pad the thumb's position IS the value, and a
+## relative mapping lets the control and the thing it controls drift apart.
+##
+## The dead zone is not optional. Without one a virtual stick reads every tremor
+## of a resting thumb and the machine wanders on its own, which reads to the
+## player as the controls being loose rather than as their own imprecision.
+func _read_pad(local: Vector2) -> void:
+	var r := PAD * 0.5
+	_pad_vec = ((local - Vector2(r, r)) / (r * 0.78)).limit_length(1.0)
+	if _pad_vec.length() < 0.14:
+		_pad_vec = Vector2.ZERO
+		return
+	sim.steer_to(_pad_vec.x * Tuning.LANE_HALF_WIDTH)
 
 
 func _mat(c: Color) -> StandardMaterial3D:
@@ -156,7 +270,35 @@ func _process(delta: float) -> void:
 
 func _tick(dt: float) -> void:
 	sim.advance(dt)
+	_advance_interlude(dt)
 	_sync()
+
+
+## The only place the world can be started again, and the reason it exists is
+## worth reading before deleting it.
+##
+## A game built from an earlier version of this template connected nothing to
+## `level_finished`. `over` went true at the end of the first level,
+## `advance()` returned early from then on, and it sat frozen with a live HUD -
+## which to the person holding the phone is a crash. It was the first thing they
+## hit, and no test caught it because **every test in the suite played a level
+## and read the state at the end, which is the exact instant the freeze began.**
+## The suite was not weak; it was uniform.
+func _on_level_finished(won: bool) -> void:
+	_interlude = INTERLUDE_SECONDS
+	_interlude_won = won
+
+
+func _advance_interlude(dt: float) -> void:
+	if _interlude <= 0.0:
+		return
+	_interlude -= dt
+	if _interlude > 0.0:
+		return
+	if _interlude_won:
+		sim.next_level()
+	else:
+		sim.restart(1)
 
 
 ## The headless seam.
@@ -179,6 +321,7 @@ func freeze(start_level: int = 1) -> void:
 	_ensure_booted()
 	frozen = true
 	sim.restart(start_level)
+	_interlude = 0.0
 	_sync()
 
 

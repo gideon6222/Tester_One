@@ -67,7 +67,77 @@ func _initialize() -> void:
 	_t.ok(main._hud.text.contains("SCORE"), "the HUD is not being written")
 	_t.ok(main._hud.text.contains(str(main.sim.lives)), "the HUD lives count disagrees with the run")
 
+	_check_the_controls_are_anchored(main)
+	_check_the_level_can_be_left(main)
+
 	_finish()
+
+
+## The controls must be ANCHORED to the viewport, never placed at a literal
+## coordinate.
+##
+## A structural assertion rather than a behavioural one, because the bug it
+## guards against is invisible at the size the tests run. The project stretches
+## with `aspect = "expand"`, which keeps the base WIDTH and extends the HEIGHT -
+## so on a 19.5:9 phone the canvas is about 1080x2340 while the base is
+## 1080x1920. Controls laid out against the literal 1920 drew hundreds of pixels
+## above where they belonged, and the report was "the icons are about half an
+## inch too high".
+##
+## **A headless run uses the base size, where the wrong layout and the right one
+## are identical** - so no screenshot or coordinate check taken here could ever
+## have caught it. What CAN be checked is the property that makes it impossible.
+func _check_the_controls_are_anchored(main) -> void:
+	_t.begin("smoke > the controls are anchored, not placed")
+	var pad: Control = main._pad
+	_t.eq(pad.anchor_bottom, 1.0,
+		"the pad is not anchored to the bottom of the viewport - it will drift on a tall screen")
+	_t.eq(pad.anchor_top, 1.0,
+		"the pad is anchored to the TOP, so its distance from the bottom follows the aspect ratio")
+	_t.lt(pad.offset_bottom, 0.0,
+		"the pad is offset downward from its anchor and will sit off the bottom of the screen")
+	_t.ok(pad.gui_input.get_connections().size() > 0,
+		"the pad does not handle its own input, so its hit box is a second source of truth")
+	_t.eq(pad.mouse_filter, Control.MOUSE_FILTER_STOP,
+		"the pad does not consume its own touches, so one gesture drives two things")
+
+
+## A finished level must start the next one.
+##
+## The assertion an earlier version of this template did not have, and the one
+## that would have caught the first bug a game built from it shipped: `over`
+## went true at the end of a level, `advance()` returned early from then on, and
+## the game froze with a live HUD.
+##
+## Every other test in the suite plays a level and reads the state at the END,
+## which is the exact instant that freeze begins. **A suite that always stops
+## where the content stops cannot see past the end of the content**, so this one
+## deliberately drives THROUGH the boundary - and through the real scene, since
+## the missing code was in the renderer's handler and not in Sim.
+func _check_the_level_can_be_left(main) -> void:
+	_t.begin("smoke > a finished level starts the next one")
+	main.freeze()
+	var guard := 0
+	while not main.sim.over and guard < 12000:
+		main.advance(1.0 / 60.0, 1.0 / 60.0)
+		guard += 1
+	_t.eq(main.sim.over, true, "the level never ended one way or the other")
+
+	var level: int = main.sim.level
+	var won: bool = main.sim.won
+
+	main.advance(main.INTERLUDE_SECONDS + 0.5, 1.0 / 60.0)
+	_t.eq(main.sim.over, false,
+		"the game is still frozen after the interlude - this is the bug that shipped")
+	if won:
+		_t.eq(main.sim.level, level + 1, "finishing a level did not start the next one")
+	else:
+		_t.eq(main.sim.level, 1, "running out did not send the run back to the first level")
+
+	# And it has to actually play on the other side.
+	var before: float = main.sim.distance
+	main.advance(1.0, 1.0 / 60.0)
+	_t.gt(main.sim.distance, before, "the next level does not advance when the frame loop runs")
 
 
 func _live(items: Array[Dictionary]) -> int:

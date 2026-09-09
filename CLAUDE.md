@@ -59,11 +59,35 @@ something to read.
 | `src/game/main.tscn` | Four lines. One node with the script; the world is built in code |
 | `src/build_stamp.gd` | Overwritten at build time. Committed fallback says `dev` |
 | `src/changelog.gd` | `VERSION` and the player-facing history |
+| `test/policies.gd` | Scripted players. **The definition of "playing well"** |
 | `test/run_tests.gd` | Pure tests. No node, no viewport, no GPU |
 | `test/run_smoke.gd` | Boots the real scene and plays it |
+| `test/run_probe.gd` | Balance readings over several levels. Prints; never fails |
 | `test/harness.gd` | The assertions. Deliberately small — see NOTES.md |
+| `scripts/shot.gd` | Screenshot of the real game, at the PHONE's aspect ratio |
 | `scripts/check_size.gd` | APK size guard, fails in both directions |
 | `scripts/stamp.ps1` | Writes the build stamp from git |
+
+## Copying this to start a game
+
+```powershell
+Copy-Item -Recurse C:\dev\godot-template C:\dev\<game>
+Remove-Item -Recurse -Force C:\dev\<game>\.git, C:\dev\<game>\.godot, C:\dev\<game>\android, C:\dev\<game>\build
+```
+
+Then `git init`, and rename in five places: `project.godot` (`config/name`,
+`config/description`), `export_presets.cfg` (`package/unique_name`, `package/name`, and BOTH
+`export_path` lines), `README.md`, `CLAUDE.md`, and `scripts/check_size.gd` (the APK path).
+Reset `src/changelog.gd` to 0.1.0 with a fresh entry. Ask Gideon to create an empty public
+repo and push into it; he does that part.
+
+**Do not grow this repo into a game.** Copy it and grow the copy, or the next game starts
+from something already shaped by the last one.
+
+**Set `ANDROID_DEBUG_KEYSTORE_B64` as a repository secret** from
+`C:\dev\toolchain\debug.keystore`, base64-encoded, before the second build matters. CI
+generates a throwaway key otherwise, so every build is signed differently and Android refuses
+to update the app in place.
 
 ## Invariants
 
@@ -92,6 +116,24 @@ something to read.
   perfectly and nothing is drawn. `run_smoke.gd` compares the count against the model.
 - **Freeze before advancing** in any harness, or results move with the speed of the
   machine.
+- **A finished level must start the next one.** `level_finished` has to be connected to
+  something that clears `over`. A game built from an earlier version of this template did not
+  connect it, `advance()` returned early forever, and it froze with a live HUD - which is a
+  crash as far as the player is concerned. `run_smoke.gd` drives through the boundary.
+- **Nothing in the HUD may be positioned against a literal screen size.** The project
+  stretches with `aspect = "expand"`, so the canvas is about 1080x2340 on the phone and not
+  1080x1920. Anchor to a full-rect `Control`, and let every interactive control own its input
+  through `_gui_input`. See the long note in `main.gd` - this has shipped wrong once.
+- **A golden over floats needs `TestHarness.FLOAT_EPS`**, not exact equality. `snappedf` does
+  not round-trip through a source literal, and the goldens are recorded on Windows and checked
+  on a Linux runner.
+- **A headless run allocates no MultiMesh buffer**, so instance colours read back as black
+  there and prove nothing. Check colour in a real renderer or not at all.
+- **`global_transform` outside the tree does not error - it returns IDENTITY.** In any
+  harness use `transform`. `Node3D.look_at` at least has the decency to fail.
+- **A value read out of a Dictionary is a Variant**, and `:=` cannot infer from one. Annotate
+  the local: `var pos: Vector3 = c.pos`. Entities held as dictionaries - which is what keeps
+  the scene tree out of the test runner - make this constant.
 
 ## Signing, and the two builds
 
