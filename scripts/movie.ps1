@@ -28,6 +28,20 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
+## Native commands write progress and warnings to STDERR, and
+## `$ErrorActionPreference = 'Stop'` turns any of that into a terminating error.
+## Godot's Movie Maker run ends with a shutdown warning, so the script died after
+## rendering all 3,840 frames and before tiling a single one of them: the
+## expensive half succeeded and the useful half never ran.
+##
+## Third script in this repo with the same fault. Every native call goes through
+## this now, and the exit code below is the only thing that decides.
+function Native([scriptblock]$Block) {
+  $prev = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try { & $Block } finally { $ErrorActionPreference = $prev }
+}
+
 ## ffmpeg, found even when this shell's PATH predates the install.
 ##
 ## winget puts ffmpeg on the USER PATH, which a shell only picks up when it starts.
@@ -69,7 +83,7 @@ try {
   }
   $gargs += $UserArgs
   Write-Host "==> filming $frames frames at $Fps fps -> $out"
-  & $godot @gargs *> "$out\godot.log"
+  Native { & $godot @gargs *> "$out\godot.log" }
   $exit = $LASTEXITCODE
   $pngs = Get-ChildItem $out -Filter 'frame*.png'
   if ($pngs.Count -lt 2) {
@@ -83,9 +97,9 @@ try {
   $font = 'C\:/Windows/Fonts/consola.ttf'
   $vf = "select='not(mod(n\,$Every))',drawtext=fontfile='$font':text='%{n}':x=6:y=6:fontsize=28:fontcolor=white:box=1:boxcolor=black@0.5,scale=230:-1,tile=${Cols}x${rows}"
   $inpat = (Join-Path $out 'frame%08d.png')
-  & $ffmpeg -loglevel error -y -framerate $Fps -i $inpat -vf $vf -fps_mode passthrough -frames:v 1 (Join-Path $out 'sheet.png')
+  Native { & $ffmpeg -loglevel error -y -framerate $Fps -i $inpat -vf $vf -fps_mode passthrough -frames:v 1 (Join-Path $out 'sheet.png') }
   if ($LASTEXITCODE -ne 0) { throw "ffmpeg failed building the sheet" }
-  & $ffmpeg -loglevel error -y -framerate $Fps -i $inpat -c:v libx264 -pix_fmt yuv420p -crf 22 (Join-Path $out 'run.mp4') 2>$null
+  Native { & $ffmpeg -loglevel error -y -framerate $Fps -i $inpat -c:v libx264 -pix_fmt yuv420p -crf 22 (Join-Path $out 'run.mp4') 2>&1 | Out-Null }
 
   $errors = Select-String -Path "$out\godot.log" -Pattern 'ERROR|SCRIPT ERROR|WARNING' | Select-Object -First 20
   Write-Host "==> $($pngs.Count) frames, sheet: $out\sheet.png  (tile n = frame n*$Every, $Every frames = $([math]::Round($Every/$Fps,2)) s)"
