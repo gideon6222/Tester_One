@@ -18,7 +18,15 @@ try {
 
   function Run($label, $log, [string[]] $a, [switch] $AllowFail) {
     $t = [Diagnostics.Stopwatch]::StartNew()
-    & $godot @a *> $log
+    # `$ErrorActionPreference = 'Stop'` turns a native command's STDERR into a
+    # terminating error BEFORE the exit-code check below it ever runs, so
+    # -AllowFail could never fire and a step that merely chatted to stderr killed
+    # the whole gate with a PowerShell stack trace instead of a result line.
+    # Relaxing the preference around the call is the fix; the exit code and the
+    # error count below are then the only things that decide.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $godot @a *> $log } finally { $ErrorActionPreference = $prev }
     $code = $LASTEXITCODE
     $errs = Select-String -Path $log -Pattern '^(SCRIPT )?ERROR' | Measure-Object | Select-Object -ExpandProperty Count
     $ok = ($code -eq 0 -and $errs -eq 0) -or $AllowFail

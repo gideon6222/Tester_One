@@ -111,7 +111,11 @@ jobs:
               -keypass android -keystore /tmp/debug.keystore -storepass android \
               -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
           else
-            echo "$KEYSTORE_B64" | base64 -d > /tmp/debug.keystore
+            # Keep only base64 characters before decoding. GNU base64 rejects a carriage
+            # return, and a secret set from a CRLF file carries one, which fails as
+            # "invalid input" and reads like a corrupt keystore. This failed the very
+            # first CI run of the first game scaffolded from this template.
+            echo "$KEYSTORE_B64" | tr -dc 'A-Za-z0-9+/=' | base64 -d > /tmp/debug.keystore
           fi
           test -s /tmp/debug.keystore
 
@@ -276,7 +280,7 @@ jobs:
             echo "See PLAY.md for which secrets to add."
             exit 1
           fi
-          echo "$KEYSTORE_B64" | base64 -d > /tmp/upload.keystore
+          echo "$KEYSTORE_B64" | tr -dc 'A-Za-z0-9+/=' | base64 -d > /tmp/upload.keystore
           test -s /tmp/upload.keystore
 
       - name: Stamp the build

@@ -4,6 +4,11 @@
 
 # Export output.
 build/
+# ...except the marker that stops Godot importing and EXPORTING what films
+# and exports leave in there. Without it the exporter packed 3,720 filmed PNG
+# frames into the APK and it came out at 1.42 GB against a 28 MB budget.
+!build/
+!build/.gdignore
 *.apk
 *.aab
 *.idsig
