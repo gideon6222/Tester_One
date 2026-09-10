@@ -129,3 +129,14 @@ test with **12 testers opted in for 14 continuous days** before production acces
 internal testing track takes up to 100 testers with no review wait and is the fastest way
 to get a build onto the phone through Play, but it does **not** count toward that 14-day
 requirement.
+
+## Framework v2, 2026-09-10
+
+Added with the knowledge-base rewrite (see `C:\dev\gamedev-notes\README.md`): `scripts/check.ps1`
+(the local gate in one call), `scripts/movie.ps1` plus the `ReplayPlayer` autoload
+(`scripts/replay_player.gd`) for deterministic filmed runs into contact sheets, `scripts/device.ps1`
+for the phone over adb, `test/replays/` for recorded scenarios, and `config/quit_on_go_back=false`.
+`CLAUDE.md` now imports the notes' `INDEX.md` instead of repeating the toolchain and invariants,
+which live in `GODOT.md`. **None of the new scripts has been run on this machine yet**: the first
+session to use each one should verify it and `/record-lesson` anything that needed fixing
+(the replay autoload in particular has not been booted under the smoke harness).

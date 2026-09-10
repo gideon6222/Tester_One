@@ -12,6 +12,14 @@ run/main_scene="res://src/game/main.tscn"
 config/features=PackedStringArray("4.7", "Mobile")
 config/icon="res://icon.svg"
 
+; The Android back button is handled by the game (pause in play, back in menus), never a quit.
+config/quit_on_go_back=false
+
+[autoload]
+
+; Records and replays touch input for filmed runs (scripts/movie.ps1). Inert without a user arg.
+ReplayPlayer="*res://scripts/replay_player.gd"
+
 [display]
 
 ; Portrait, because that is the only shape these games are played in.
