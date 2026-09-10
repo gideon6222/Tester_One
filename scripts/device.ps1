@@ -23,6 +23,17 @@ param(
   [int] $Seconds = 0
 )
 $ErrorActionPreference = 'Stop'
+
+## Native commands write progress and warnings to STDERR, and `$ErrorActionPreference =
+## 'Stop'` turns any of that into a terminating error BEFORE the exit-code check below it
+## runs. adb is a heavy offender: "daemon not running; starting now", "Performing Streamed
+## Install" and screenrecord's own progress all go to stderr on a completely successful run.
+## Redirection does not save it - the text moves and the ErrorRecord still throws.
+function Native([scriptblock]$Block) {
+  $prev = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try { & $Block } finally { $ErrorActionPreference = $prev }
+}
 $root = Resolve-Path (Join-Path $PSScriptRoot '..')
 $adb = Join-Path 'C:\dev\toolchain\android-sdk\platform-tools' 'adb.exe'
 if (-not (Test-Path $adb)) { $adb = 'adb' }
@@ -36,9 +47,9 @@ $outDir = Join-Path $root 'build\phone'
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 
-function Adb { param([Parameter(ValueFromRemainingArguments)] $a) & $adb @a; if ($LASTEXITCODE -ne 0) { throw "adb $($a -join ' ') failed" } }
+function Adb { param([Parameter(ValueFromRemainingArguments)] $a) Native { & $adb @a }; if ($LASTEXITCODE -ne 0) { throw "adb $($a -join ' ') failed" } }
 function Require-Device {
-  $d = (& $adb devices) -split "`n" | Where-Object { $_ -match '\tdevice$' }
+  $d = (Native { & $adb devices }) -split "`n" | Where-Object { $_ -match '	device$' }
   if (-not $d) { throw "no phone connected over adb. Plug it in, unlock it, and accept the USB debugging prompt." }
 }
 ## Same resolver as movie.ps1: winget puts ffmpeg on the USER PATH, which a shell only
@@ -59,7 +70,7 @@ function Resolve-Ffmpeg {
 function Sheet($video, $sheet) {
   $ffmpeg = Resolve-Ffmpeg
   if ($ffmpeg) {
-    & $ffmpeg -loglevel error -y -i $video -vf "fps=2,drawtext=fontfile='C\:/Windows/Fonts/consola.ttf':text='%{pts\:hms}':x=6:y=6:fontsize=26:fontcolor=white:box=1:boxcolor=black@0.5,scale=230:-1,tile=6x5" -frames:v 1 $sheet
+    Native { & $ffmpeg -loglevel error -y -i $video -vf "fps=2,drawtext=fontfile='C\:/Windows/Fonts/consola.ttf':text='%{pts\:hms}':x=6:y=6:fontsize=26:fontcolor=white:box=1:boxcolor=black@0.5,scale=230:-1,tile=6x5" -frames:v 1 $sheet }
     if (Test-Path $sheet) { Write-Host "   sheet: $sheet (one tile per half second)" }
   } else {
     Write-Host "   (no ffmpeg, so no contact sheet: winget install --id Gyan.FFmpeg --scope user)"
@@ -85,7 +96,7 @@ switch ($Action.ToLower()) {
   'shot' {
     $f = Join-Path $outDir "$stamp.png"
     # exec-out to a FILE; piping the bytes through PowerShell corrupts them.
-    & cmd /c "`"$adb`" exec-out screencap -p > `"$f`""
+    Native { & cmd /c "`"$adb`" exec-out screencap -p > `"$f`"" }
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $f) -or (Get-Item $f).Length -lt 1000) { throw "screencap failed" }
     Write-Host "shot: $f"
   }
@@ -105,12 +116,12 @@ switch ($Action.ToLower()) {
       Write-Host "play for $Seconds s..."
       Start-Sleep -Seconds $Seconds
     }
-    $g = & $adb shell dumpsys gfxinfo $pkg
+    $g = Native { & $adb shell dumpsys gfxinfo $pkg }
     $g | Select-String -Pattern 'Total frames|Janky|percentile|Number Missed Vsync|Number Slow' | ForEach-Object { Write-Host "   $($_.Line.Trim())" }
     Write-Host "   (gfxinfo instruments HWUI; if the frame count is tiny, read Engine.get_frames_per_second() from the game's own log instead)"
     $t = try { & $adb shell dumpsys thermalservice 2>$null } catch { @() }
     $t | Select-String -Pattern 'Thermal Status|mStatus|CPU|GPU|SKIN' | Select-Object -First 8 | ForEach-Object { Write-Host "   $($_.Line.Trim())" }
-    $fps = & $adb logcat -d -s godot | Select-String -Pattern 'fps' | Select-Object -Last 3
+    $fps = Native { & $adb logcat -d -s godot } | Select-String -Pattern 'fps' | Select-Object -Last 3
     if ($fps) { $fps | ForEach-Object { Write-Host "   $($_.Line)" } }
   }
   'tap' { Adb shell input tap $Rest[0] $Rest[1] }
@@ -126,7 +137,7 @@ switch ($Action.ToLower()) {
     if ($json -and $json.Trim().StartsWith('[')) {
       [System.IO.File]::WriteAllText($dest, $json, (New-Object System.Text.UTF8Encoding($false)))
     } else {
-      & $adb pull "/sdcard/Android/data/$pkg/files/replay.json" $dest
+      Native { & $adb pull "/sdcard/Android/data/$pkg/files/replay.json" $dest }
     }
     if (Test-Path $dest) { Write-Host "replay: $dest" } else { throw "no replay.json on the phone; launch with a `record` user arg first" }
   }
