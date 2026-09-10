@@ -27,13 +27,33 @@ param(
   [string[]] $UserArgs = @()   # extra bare words after --, e.g. 'touch', 'level=3'
 )
 $ErrorActionPreference = 'Stop'
+
+## ffmpeg, found even when this shell's PATH predates the install.
+##
+## winget puts ffmpeg on the USER PATH, which a shell only picks up when it starts.
+## A long-running session - which is what a Claude session is - therefore has a
+## perfectly installed ffmpeg it cannot see, and the old message here sent the reader
+## to install.ps1, which reinstalls nothing and rewrites ~/.claude/CLAUDE.md on the
+## way past. So look where winget actually puts it before believing PATH.
+function Resolve-Ffmpeg {
+  $cmd = Get-Command ffmpeg -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+  $glob = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Gyan.FFmpeg_*\ffmpeg-*-full_build\bin\ffmpeg.exe"
+  $found = Get-ChildItem $glob -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($found) { return $found.FullName }
+  foreach ($p in ([Environment]::GetEnvironmentVariable('PATH', 'User') -split ';')) {
+    if ($p -and (Test-Path (Join-Path $p 'ffmpeg.exe'))) { return (Join-Path $p 'ffmpeg.exe') }
+  }
+  throw "ffmpeg not found. Install it with: winget install --id Gyan.FFmpeg --scope user"
+}
+
 $root = Resolve-Path (Join-Path $PSScriptRoot '..')
 Push-Location $root
 try {
   $godot = $env:GODOT
   if (-not $godot) { $godot = (Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\GodotEngine.GodotEngine_*\Godot_v4.7.2-stable_win64_console.exe" | Select-Object -First 1).FullName }
   if (-not $godot) { throw "Godot not found; set `$env:GODOT" }
-  if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) { throw "ffmpeg not on PATH; run C:\dev\gamedev-notes\setup\install.ps1" }
+  $ffmpeg = Resolve-Ffmpeg
 
   if (-not $Name) { $Name = if ($Replay) { [IO.Path]::GetFileNameWithoutExtension($Replay) } else { 'run' } }
   $out = Join-Path $root "build\movie\$Name"
@@ -63,9 +83,9 @@ try {
   $font = 'C\:/Windows/Fonts/consola.ttf'
   $vf = "select='not(mod(n\,$Every))',drawtext=fontfile='$font':text='%{n}':x=6:y=6:fontsize=28:fontcolor=white:box=1:boxcolor=black@0.5,scale=230:-1,tile=${Cols}x${rows}"
   $inpat = (Join-Path $out 'frame%08d.png')
-  & ffmpeg -loglevel error -y -framerate $Fps -i $inpat -vf $vf -fps_mode passthrough -frames:v 1 (Join-Path $out 'sheet.png')
+  & $ffmpeg -loglevel error -y -framerate $Fps -i $inpat -vf $vf -fps_mode passthrough -frames:v 1 (Join-Path $out 'sheet.png')
   if ($LASTEXITCODE -ne 0) { throw "ffmpeg failed building the sheet" }
-  & ffmpeg -loglevel error -y -framerate $Fps -i $inpat -c:v libx264 -pix_fmt yuv420p -crf 22 (Join-Path $out 'run.mp4') 2>$null
+  & $ffmpeg -loglevel error -y -framerate $Fps -i $inpat -c:v libx264 -pix_fmt yuv420p -crf 22 (Join-Path $out 'run.mp4') 2>$null
 
   $errors = Select-String -Path "$out\godot.log" -Pattern 'ERROR|SCRIPT ERROR|WARNING' | Select-Object -First 20
   Write-Host "==> $($pngs.Count) frames, sheet: $out\sheet.png  (tile n = frame n*$Every, $Every frames = $([math]::Round($Every/$Fps,2)) s)"

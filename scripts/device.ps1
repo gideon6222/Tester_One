@@ -41,10 +41,28 @@ function Require-Device {
   $d = (& $adb devices) -split "`n" | Where-Object { $_ -match '\tdevice$' }
   if (-not $d) { throw "no phone connected over adb. Plug it in, unlock it, and accept the USB debugging prompt." }
 }
+## Same resolver as movie.ps1: winget puts ffmpeg on the USER PATH, which a shell only
+## reads at start, so a long-running session has an installed ffmpeg it cannot see. A
+## missing sheet is a silent loss here - the video still lands - so it is worth looking.
+function Resolve-Ffmpeg {
+  $cmd = Get-Command ffmpeg -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+  $glob = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Gyan.FFmpeg_*\ffmpeg-*-full_build\bin\ffmpeg.exe"
+  $found = Get-ChildItem $glob -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($found) { return $found.FullName }
+  foreach ($p in ([Environment]::GetEnvironmentVariable('PATH', 'User') -split ';')) {
+    if ($p -and (Test-Path (Join-Path $p 'ffmpeg.exe'))) { return (Join-Path $p 'ffmpeg.exe') }
+  }
+  return ""
+}
+
 function Sheet($video, $sheet) {
-  if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
-    & ffmpeg -loglevel error -y -i $video -vf "fps=2,drawtext=fontfile='C\:/Windows/Fonts/consola.ttf':text='%{pts\:hms}':x=6:y=6:fontsize=26:fontcolor=white:box=1:boxcolor=black@0.5,scale=230:-1,tile=6x5" -frames:v 1 $sheet
+  $ffmpeg = Resolve-Ffmpeg
+  if ($ffmpeg) {
+    & $ffmpeg -loglevel error -y -i $video -vf "fps=2,drawtext=fontfile='C\:/Windows/Fonts/consola.ttf':text='%{pts\:hms}':x=6:y=6:fontsize=26:fontcolor=white:box=1:boxcolor=black@0.5,scale=230:-1,tile=6x5" -frames:v 1 $sheet
     if (Test-Path $sheet) { Write-Host "   sheet: $sheet (one tile per half second)" }
+  } else {
+    Write-Host "   (no ffmpeg, so no contact sheet: winget install --id Gyan.FFmpeg --scope user)"
   }
 }
 
