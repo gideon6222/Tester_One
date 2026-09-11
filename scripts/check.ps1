@@ -26,9 +26,26 @@ try {
     # error count below are then the only things that decide.
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    try { & $godot @a *> $log } finally { $ErrorActionPreference = $prev }
+    # **Unwrap the ErrorRecords and write UTF-8, or the log is not what Godot
+    # printed and the error count below is a lie.**
+    #
+    # `*> $log` sends a native command's stderr through PowerShell's error
+    # channel, which renders each line as
+    #   Godot_v4.7.2-stable_win64_console.exe : SCRIPT ERROR: ...
+    # plus a `+ CategoryInfo` block, in UTF-16. So an anchored `^SCRIPT ERROR`
+    # matched nothing, ever: the gate reported `errors 0` on a smoke run that
+    # was throwing inside a check and skipping every assertion after it. It had
+    # been blind in every step since the template was written.
+    #
+    # Calling ToString() on the ErrorRecord gives back the line Godot actually
+    # wrote, and -Encoding utf8 makes the log greppable by anything else too.
+    try {
+      & $godot @a 2>&1 |
+        ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.ToString() } else { $_ } } |
+        Out-File -FilePath $log -Encoding utf8
+    } finally { $ErrorActionPreference = $prev }
     $code = $LASTEXITCODE
-    $errs = Select-String -Path $log -Pattern '^(SCRIPT )?ERROR' | Measure-Object | Select-Object -ExpandProperty Count
+    $errs = Select-String -Path $log -Pattern '^(SCRIPT |USER )?ERROR' | Measure-Object | Select-Object -ExpandProperty Count
     $ok = ($code -eq 0 -and $errs -eq 0) -or $AllowFail
     Write-Host ("{0,-14} {1}  {2:N1}s  exit {3}  errors {4}" -f $label, ($(if ($ok) { 'ok  ' } else { 'FAIL' })), $t.Elapsed.TotalSeconds, $code, $errs)
     if (-not $ok) {
