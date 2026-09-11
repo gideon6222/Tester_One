@@ -2,12 +2,16 @@
 .godot/
 .import/
 
-# Export output.
-build/
-# ...except the marker that stops Godot importing and EXPORTING what films
-# and exports leave in there. Without it the exporter packed 3,720 filmed PNG
-# frames into the APK and it came out at 1.42 GB against a 28 MB budget.
-!build/
+# Export output, film frames and check logs - everything a tool writes in here.
+#
+# `build/*` and not `build/`: a bare `build/` followed by `!build/` un-ignores
+# the whole DIRECTORY, and git then tracks everything inside it. That shipped
+# three check logs into a commit. Ignoring the CONTENTS and re-including one
+# file is the pattern that actually works.
+build/*
+# ...except the marker that stops Godot importing and EXPORTING what films and
+# exports leave in there. Without it the exporter packed 3,720 filmed PNG frames
+# into the APK and it came out at 1.42 GB against a 28 MB budget.
 !build/.gdignore
 *.apk
 *.aab
