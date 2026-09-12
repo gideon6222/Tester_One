@@ -52,6 +52,14 @@ var _replaying := false
 ## `bot_can_drive()`. See `src/game/main.gd`, which has the contract and the
 ## reason the arithmetic lives there rather than here.
 ##
+## **The second thumb.** A game that is played by pressing and holding rather
+## than by dragging - a cast button, a reel you hold, a keep-or-release pair -
+## also supplies `bot_touch_pixels(policy, mem, size) -> Vector2`: where the
+## thumb is DOWN this frame in viewport pixels, or `Vector2.INF` for up. This
+## file turns the edges into real `InputEventScreenTouch` presses and releases,
+## so a bot's press lands on the button through the viewport like a finger's. A
+## game whose bot never presses anything leaves the method out.
+##
 ## `policy=` and `record=` together write the bot's run out as an ordinary replay
 ## file, because the events it pushes are real events and the recorder below sees
 ## them like any others.
@@ -59,6 +67,14 @@ var _policy := ""
 var _policy_mem := {}
 var _bot: Node = null
 var _bot_missing_reported := false
+var _bot_down := false
+var _bot_down_at := Vector2.ZERO
+
+## The drag thumb is finger 0 and the pressing thumb is finger 1, as on a phone.
+## They must differ: the GUI routes a drag to whichever control its finger went
+## DOWN on, so a drag on the same index as a held button would be delivered to
+## the button rather than to the water under the resting thumb.
+const TOUCH_FINGER := 1
 
 ## How far a thumb moves in one physics frame at a brisk drag: 1080 px across in
 ## about a third of a second is 54 px a frame at 60 Hz. Unclamped the bot
@@ -148,6 +164,11 @@ func _drive_with_a_thumb() -> void:
 	if _bot.has_method("bot_can_drive"):
 		var allowed: bool = _bot.bot_can_drive()
 		if not allowed:
+			# A bot that may not drive takes its thumb OFF. Left down through a
+			# cinematic, the next press it wants is a press it already holds: no
+			# event is generated, and the run stalls under a thumb that never
+			# lifts, which films as a game that ignores its own button.
+			_lift_thumb()
 			return
 
 	var rect := get_viewport().get_visible_rect()
@@ -159,19 +180,52 @@ func _drive_with_a_thumb() -> void:
 	# cannot infer from one - it fails the whole FILE rather than the line, and the
 	# symptom is a run that never terminates (GODOT.md).
 	var drag: Vector2 = _bot.bot_drag_pixels(_policy, _policy_mem, span)
-	if drag.length() < 0.001:
-		return
-	drag.x = clampf(drag.x, -MAX_DRAG_PIXELS, MAX_DRAG_PIXELS)
-	drag.y = clampf(drag.y, -MAX_DRAG_PIXELS, MAX_DRAG_PIXELS)
+	if drag.length() >= 0.001:
+		drag.x = clampf(drag.x, -MAX_DRAG_PIXELS, MAX_DRAG_PIXELS)
+		drag.y = clampf(drag.y, -MAX_DRAG_PIXELS, MAX_DRAG_PIXELS)
+		var d := InputEventScreenDrag.new()
+		d.index = 0
+		# Mid-screen and low, where a thumb actually rests. The position matters to any
+		# control that cares WHERE it was touched, so it is a plausible one rather than
+		# the origin.
+		d.position = Vector2(span * 0.5, rect.size.y * 0.8)
+		d.relative = drag
+		get_viewport().push_input(d, true)
 
-	var d := InputEventScreenDrag.new()
-	d.index = 0
-	# Mid-screen and low, where a thumb actually rests. The position matters to any
-	# control that cares WHERE it was touched, so it is a plausible one rather than
-	# the origin.
-	d.position = Vector2(span * 0.5, rect.size.y * 0.8)
-	d.relative = drag
-	get_viewport().push_input(d, true)
+	# The second thumb. Only the EDGES become events: a point where there was
+	# none is a press, none where there was a point is a release, and a point
+	# that moved to a different control is a release now and a press next frame,
+	# because a thumb does not slide from one button onto another.
+	if not _bot.has_method("bot_touch_pixels"):
+		return
+	var at: Vector2 = _bot.bot_touch_pixels(_policy, _policy_mem, rect.size)
+	var want_down := at.is_finite()
+	if want_down and _bot_down and at.distance_to(_bot_down_at) > 1.0:
+		_lift_thumb()
+		return
+	if want_down == _bot_down:
+		return
+	if want_down:
+		_bot_down = true
+		_bot_down_at = at
+		_push_touch(true, at)
+	else:
+		_lift_thumb()
+
+
+func _lift_thumb() -> void:
+	if not _bot_down:
+		return
+	_bot_down = false
+	_push_touch(false, _bot_down_at)
+
+
+func _push_touch(pressed: bool, at: Vector2) -> void:
+	var t := InputEventScreenTouch.new()
+	t.index = TOUCH_FINGER
+	t.position = at
+	t.pressed = pressed
+	get_viewport().push_input(t, true)
 
 
 ## The game is whatever implements the contract. Matching on the contract itself
