@@ -7,6 +7,20 @@
 #>
 [CmdletBinding()]
 param([switch] $Export)   # also export the debug APK and run the size guard
+function Unwrap-ErrorLine($rec) {
+  # A BLANK stderr line - printerr("") between the paragraphs of an error block -
+  # arrives as an ErrorRecord whose ToString() returns the bare type name, so the
+  # log reads `System.Management.Automation.RemoteException` where the program
+  # wrote nothing at all. Exception.Message is the line Godot actually emitted,
+  # empty string included. Same family as the ErrorRecord wrapping itself: a log
+  # that does not say what the program printed.
+  $m = $null
+  if ($null -ne $rec.Exception) { $m = $rec.Exception.Message }
+  if ($null -eq $m) { $m = $rec.ToString() }
+  if ($m -eq 'System.Management.Automation.RemoteException') { return '' }
+  return $m
+}
+
 $ErrorActionPreference = 'Stop'
 $root = Resolve-Path (Join-Path $PSScriptRoot '..')
 Push-Location $root
@@ -41,7 +55,7 @@ try {
     # wrote, and -Encoding utf8 makes the log greppable by anything else too.
     try {
       & $godot @a 2>&1 |
-        ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.ToString() } else { $_ } } |
+        ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { Unwrap-ErrorLine $_ } else { $_ } } |
         Out-File -FilePath $log -Encoding utf8
     } finally { $ErrorActionPreference = $prev }
     $code = $LASTEXITCODE

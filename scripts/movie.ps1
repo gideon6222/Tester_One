@@ -36,6 +36,20 @@ $ErrorActionPreference = 'Stop'
 ##
 ## Third script in this repo with the same fault. Every native call goes through
 ## this now, and the exit code below is the only thing that decides.
+function Unwrap-ErrorLine($rec) {
+  # A BLANK stderr line - printerr("") between the paragraphs of an error block -
+  # arrives as an ErrorRecord whose ToString() returns the bare type name, so the
+  # log reads `System.Management.Automation.RemoteException` where the program
+  # wrote nothing at all. Exception.Message is the line Godot actually emitted,
+  # empty string included. Same family as the ErrorRecord wrapping itself: a log
+  # that does not say what the program printed.
+  $m = $null
+  if ($null -ne $rec.Exception) { $m = $rec.Exception.Message }
+  if ($null -eq $m) { $m = $rec.ToString() }
+  if ($m -eq 'System.Management.Automation.RemoteException') { return '' }
+  return $m
+}
+
 function Native([scriptblock]$Block) {
   $prev = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
@@ -101,7 +115,7 @@ try {
   ## wrote, and -Encoding utf8 makes the log greppable by anything else too.
   Native {
     & $godot @gargs 2>&1 |
-      ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.ToString() } else { $_ } } |
+      ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { Unwrap-ErrorLine $_ } else { $_ } } |
       Out-File -FilePath "$out\godot.log" -Encoding utf8
   }
   $exit = $LASTEXITCODE
