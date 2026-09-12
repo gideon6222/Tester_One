@@ -55,22 +55,10 @@ const FORBIDDEN := [
 	["randfn(", "an unseeded roll, spelled differently"],
 ]
 
-## NOT FORBIDDEN, DELIBERATELY, AND NOT YET DECIDED:
-##
-##	["FileAccess", "saving is I/O, and I/O is not the simulation"],
-##	["DirAccess", "as above"],
-##
-## **The studio has not settled whether save code belongs inside the wall.**
-## gravewell's `src/sim/save.gd` uses `FileAccess` and its header claims that is
-## "the same place save.gd sits in the sibling Godot games"; candle-gift agrees;
-## stillwater's `src/sim/save.gd` says "no FileAccess in here and no nodes" and
-## moves the writes out to `main.gd`. The web game's boundary test sides with
-## gravewell in its header. Three files now propagate a claim about a convention
-## that does not exist, and turning either reading into a gate here would make
-## this file the fourth.
-##
-## **The decision goes in INDEX.md rule 2 first**, in one sentence, and then
-## this block is uncommented or deleted. Do not settle it by editing a test.
+## `FileAccess` and `DirAccess` are deliberately NOT gate tokens: INDEX.md rule 2
+## settles that the wall excludes the renderer, not the disk - `src/sim` may use
+## them under `user://`, provided serialisation is a pure state/Dictionary pair
+## round-tripped by a test that touches no file.
 
 
 func _sim_files() -> Array[String]:
