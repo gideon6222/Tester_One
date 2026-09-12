@@ -436,6 +436,68 @@ func _unhandled_input(event: InputEvent) -> void:
 ## Relative, not absolute: the thumb is never where the player is looking, and
 ## an absolute mapping makes the first touch of every run yank the player
 ## sideways.
+## THE BOT SEAM: what a scripted policy has to go through to count as a test of
+## the control.
+##
+## `scripts/replay_player.gd` drives `policy=<name>` runs by calling this and
+## then pushing the returned drag at the viewport as a real
+## `InputEventScreenDrag`. The split is deliberate. The driver owns everything
+## generic - the frame gate, the clamp on how fast a thumb moves, building and
+## pushing the event - and this method owns the two things only the GAME knows:
+## which policy set to ask, and the arithmetic its own handler uses.
+##
+## **Write the conversion from the handler's own constants, inverted.**
+## `drag_by` below turns a pixel delta into a world delta with
+## `dx / span * Tuning.LANE_HALF_WIDTH * 3.4`, so this turns the world delta the
+## policy wants back into pixels with the same three constants. A measured fudge
+## factor would drift the moment the control is retuned, and a bot that steers
+## almost right is worse than no bot: it films a plausible run of a broken game.
+##
+## **It must not leave the simulation changed.** `Policies.steer` mutates the
+## sim, so the target is read and put straight back. If it were left set, the bot
+## would have taken the shortcut AND filmed it, which is precisely the thing this
+## whole seam exists to stop - a policy that sets the value the control would set
+## is not a test of the control, and that is how five games shipped inverted.
+## `test/test_replay_policy.gd` asserts the restore, so a future edit that drops
+## it goes red rather than quietly making every filmed run worthless.
+##
+## Only `target_x` is saved here because `steer_to` is the only thing the
+## template's policies touch. A game whose policies also set a hold, a throttle
+## or a facing saves and restores those too, and adds them to that test.
+func bot_drag_pixels(policy: String, mem: Dictionary, span: float) -> Vector2:
+	# Loud, not silent, for the same reason drag_by is: dividing by a width that
+	# has not resolved yet yields a plausible drag with no relationship to
+	# anything, and a filmed run of it looks like a balance problem.
+	if span <= 0.0:
+		push_error("bot_drag_pixels was given a screen width of %f - the viewport is not resolved" % span)
+		return Vector2.ZERO
+	if sim == null:
+		push_error("bot_drag_pixels was called before the sim existed - call freeze() or let _ready run first")
+		return Vector2.ZERO
+
+	var was_target: float = sim.target_x
+	Policies.steer(policy, sim, mem)
+	var wants: float = sim.target_x
+	sim.target_x = was_target
+
+	var world_dx := wants - was_target
+	# A policy that is happy where it is asks for nothing. Returning a tiny drag
+	# instead would push a real event every single frame, and a film of a thumb
+	# that never lets go is not a film of the game being played.
+	if absf(world_dx) < 0.0001:
+		return Vector2.ZERO
+	return Vector2(world_dx * span / (Tuning.LANE_HALF_WIDTH * 3.4), 0.0)
+
+
+## True while a bot may drive. The driver asks before every frame it pushes.
+##
+## Steering during the interlude would send input at a screen the player cannot
+## steer on, and steering after the run is over films a corpse being nudged.
+## Neither fails anything, which is why they have to be refused here rather than
+## noticed later in a contact sheet.
+func bot_can_drive() -> bool:
+	return sim != null and not sim.over and _interlude <= 0.0
+
 func drag_by(event: InputEvent, span: float) -> void:
 	# Loud, not silent. A zero width means the viewport has not resolved yet, and
 	# `dx / 0` would steer the avatar to infinity and clamp it to the lane edge -

@@ -13,6 +13,7 @@ the rename, the GitHub repo, the secrets and the first build.
 scripts\check.ps1                                  # tests, smoke, guards
 scripts\check.ps1 -Export                          # plus build\godot-template.apk
 scripts\movie.ps1 -Seconds 10 -Name idle           # film it
+scripts\movie.ps1 -Seconds 60 -Name bot -UserArgs policy=dodger   # film a BOT playing it
 scripts\device.ps1 install                         # onto the phone
 ```
 

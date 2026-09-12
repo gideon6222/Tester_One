@@ -21,6 +21,7 @@ here. This file only says what is in this repo and how to change it safely.
 scripts\check.ps1                 # import, pure tests, smoke, size guard: the local gate
 scripts\check.ps1 -Export         # plus the debug APK
 scripts\movie.ps1 -Seconds 10 -Name idle
+scripts\movie.ps1 -Seconds 60 -Name bot -UserArgs policy=dodger   # a bot that holds a THUMB
 scripts\device.ps1 install | launch | log | shot | record 30 | perf
 & $env:GODOT --path . --resolution 460x996 --script res://scripts/shot.gd -- 14.0
 & $env:GODOT --path . --resolution 460x996 --script res://scripts/shot.gd -- 45 hit   # a named STATE
@@ -50,8 +51,9 @@ scripts\device.ps1 install | launch | log | shot | record 30 | perf
 | `test/run_smoke.gd` | Boots the real scene, plays it, drives through the level boundary |
 | `test/run_probe.gd` | Balance readings. Prints; never fails |
 | `test/harness.gd` | The assertions, deliberately small, with `FLOAT_EPS` |
-| `test/replays/` | Recorded touch scenarios for `movie.ps1` |
-| `scripts/replay_player.gd` | Autoload. `-- record=<file>`, `-- replay=<file>`, `-- touch` |
+| `test/replays/` | Recorded touch scenarios for `movie.ps1`. A `policy=` run needs none: it adapts |
+| `scripts/replay_player.gd` | Autoload. `-- record=<file>`, `-- replay=<file>`, `-- touch`, `-- policy=<name>` |
+| `test/test_replay_policy.gd` | The gate on `policy=`: the bot seam exists, restores the sim, and its drag lands where the policy asked |
 | `scripts/movie.ps1` | Film a deterministic run into a contact sheet |
 | `scripts/device.ps1` | The phone over adb |
 | `scripts/check.ps1` | The local gate in the order that fails fastest |

@@ -8,6 +8,7 @@ extends Node
 ##   godot --path . -- record=test/replays/level1.json      # write what the player does
 ##   godot --path . -- replay=test/replays/level1.json      # play it back
 ##   godot --path . -- touch                                 # emulate touch from the mouse (desk)
+##   godot --path . -- policy=dodger                         # a bot that holds a thumb
 ##
 ## On the phone `record=` writes to user://replay.json; pull it with scripts/device.ps1 pull-replay.
 ##
@@ -25,6 +26,46 @@ var _record_path := ""
 var _recorded: Array = []
 var _replaying := false
 
+## **The bot that holds a thumb.**
+##
+## Every scripted policy in this studio drives a game by calling `steer_to()`,
+## which is the value the control would set. A suite made entirely of policies
+## therefore tests the simulation and nothing between the finger and it, which is
+## how five games shipped with inverted controls past thousands of passing
+## assertions and a hundred filmed frames. `test/test_controls.gd` closes that at
+## one instant. This closes it over a whole run.
+##
+## `policy=<name>` asks the game where the policy wants to be, and then DRAGS
+## there through the real touch handler. Every frame of the resulting film went
+## through the input event, the viewport and the camera basis, so a film of a bot
+## playing well is evidence about the CONTROL and not only about the sim. The
+## first run of it on a sibling game found the evolution transform covering the
+## whole screen for 5.08 seconds, three times - a fifth of the run unreadable -
+## while all 4,800 of that game's assertions passed, because every one of them
+## drove the sim and none drove the picture.
+##
+## Recorded touch replays do not replace this. They are fixed sequences that stop
+## being valid the moment the layout moves; a policy adapts, so one line of
+## `-UserArgs policy=dodger` films any build for as long as you like.
+##
+## The game supplies `bot_drag_pixels(policy, mem, span)` and optionally
+## `bot_can_drive()`. See `src/game/main.gd`, which has the contract and the
+## reason the arithmetic lives there rather than here.
+##
+## `policy=` and `record=` together write the bot's run out as an ordinary replay
+## file, because the events it pushes are real events and the recorder below sees
+## them like any others.
+var _policy := ""
+var _policy_mem := {}
+var _bot: Node = null
+var _bot_missing_reported := false
+
+## How far a thumb moves in one physics frame at a brisk drag: 1080 px across in
+## about a third of a second is 54 px a frame at 60 Hz. Unclamped the bot
+## teleports, and a film of an avatar that teleports says nothing about whether
+## the control is reachable - which is the only question this mode exists to ask.
+const MAX_DRAG_PIXELS := 54.0
+
 
 func _ready() -> void:
 	for a in OS.get_cmdline_user_args():
@@ -37,9 +78,11 @@ func _ready() -> void:
 				_record_path = "res://" + _record_path
 		elif s == "record":
 			_record_path = "user://replay.json"
+		elif s.begins_with("policy="):
+			_policy = s.trim_prefix("policy=")
 		elif s == "touch":
 			Input.emulate_touch_from_mouse = true
-	set_physics_process(_replaying)
+	set_physics_process(_replaying or _policy != "")
 	if _record_path != "":
 		get_tree().root.tree_exiting.connect(_flush)
 
@@ -64,6 +107,9 @@ func _physics_process(_delta: float) -> void:
 	var frame := Engine.get_physics_frames()
 	if frame < 3:
 		return
+	if _policy != "":
+		_drive_with_a_thumb()
+		return
 	while _idx < _events.size() and int(_events[_idx].get("f", 0)) <= frame:
 		var e: Dictionary = _events[_idx]
 		_idx += 1
@@ -82,6 +128,63 @@ func _physics_process(_delta: float) -> void:
 			ev = t
 		get_viewport().push_input(ev, true)
 	# After the last event the run keeps going until --quit-after: the tail is worth filming.
+
+
+## Ask the game, then drag there for real.
+func _drive_with_a_thumb() -> void:
+	if _bot == null:
+		_bot = _find_bot(get_tree().root)
+	if _bot == null:
+		# Refuse loudly, once. A harness that cannot reach its subject must say so:
+		# silence here is a filmed run of a game nobody is playing, which looks
+		# exactly like a filmed run of a game that ignores input.
+		if not _bot_missing_reported:
+			_bot_missing_reported = true
+			push_error("ReplayPlayer: policy=%s was asked for, but nothing in the scene implements bot_drag_pixels(policy, mem, span). See src/game/main.gd for the contract." % _policy)
+		return
+
+	# `has_method` rather than a typed call, because the driver is generic and the
+	# gate is optional. A game that never refuses input can leave it out.
+	if _bot.has_method("bot_can_drive"):
+		var allowed: bool = _bot.bot_can_drive()
+		if not allowed:
+			return
+
+	var rect := get_viewport().get_visible_rect()
+	var span := rect.size.x
+	if span <= 0.0:
+		return
+
+	# Annotated, not inferred. A call on an untyped Node returns Variant, and `:=`
+	# cannot infer from one - it fails the whole FILE rather than the line, and the
+	# symptom is a run that never terminates (GODOT.md).
+	var drag: Vector2 = _bot.bot_drag_pixels(_policy, _policy_mem, span)
+	if drag.length() < 0.001:
+		return
+	drag.x = clampf(drag.x, -MAX_DRAG_PIXELS, MAX_DRAG_PIXELS)
+	drag.y = clampf(drag.y, -MAX_DRAG_PIXELS, MAX_DRAG_PIXELS)
+
+	var d := InputEventScreenDrag.new()
+	d.index = 0
+	# Mid-screen and low, where a thumb actually rests. The position matters to any
+	# control that cares WHERE it was touched, so it is a plausible one rather than
+	# the origin.
+	d.position = Vector2(span * 0.5, rect.size.y * 0.8)
+	d.relative = drag
+	get_viewport().push_input(d, true)
+
+
+## The game is whatever implements the contract. Matching on the contract itself
+## rather than on a node name or a class keeps this file generic: a game can put
+## the seam on its main scene, on a rig node, or anywhere else it likes.
+func _find_bot(n: Node) -> Node:
+	if n.has_method("bot_drag_pixels"):
+		return n
+	for c in n.get_children():
+		var found := _find_bot(c)
+		if found != null:
+			return found
+	return null
 
 
 func _input(event: InputEvent) -> void:
