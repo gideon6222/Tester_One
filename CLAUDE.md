@@ -36,6 +36,7 @@ scripts\device.ps1 install | launch | log | shot | record 30 | perf
 | `src/sim/tuning.gd` | Every number that shapes how it feels, plus the derived arithmetic |
 | `src/sim/util.gd` | `smooth`, `hash2`, `fmt`. The hash is load-bearing and tested |
 | `src/sim/rng.gd` | A seeded stream for values that decide *when* something happens |
+| `src/sim/save.gd` | The save as a pure `Sim` <-> `Dictionary` pair. `apply` restores every field or returns false. The `user://` wrapper at the bottom is twelve lines and nothing calls it yet |
 | `src/game/main.gd` | The shell: reads `Sim`, draws it, feeds it input. Decides nothing. Anchored HUD and a thumb pad already wired |
 | `src/game/main.tscn` | One node with the script; the world is built in code |
 | `src/build_stamp.gd` | Overwritten by CI. Committed fallback says `dev` |
@@ -44,6 +45,7 @@ scripts\device.ps1 install | launch | log | shot | record 30 | perf
 | `test/run_tests.gd` | Pure tests, discovered by GLOB. Fails on an empty glob and on an assertion count below `MIN_ASSERTIONS` |
 | `test/test_version.gd` | `VERSION` == `version/name` AND `version/code` in every export preset |
 | `test/test_sim_boundary.gd` | Standing rule 2 as a gate: reads every file under `src/sim` and fails on a Node, a Viewport, an input event or an unseeded roll |
+| `test/test_save.gd` | The other half of rule 2: the save round trip, with no file open anywhere in it. Also checks `save.gd`'s field list against `Sim`'s own properties |
 | `test/test_controls.gd` | **The handedness gate.** A real drag event through the real handler, asserting where the avatar lands ON SCREEN |
 | `test/run_smoke.gd` | Boots the real scene, plays it, drives through the level boundary |
 | `test/run_probe.gd` | Balance readings. Prints; never fails |
