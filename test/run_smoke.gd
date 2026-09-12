@@ -16,6 +16,24 @@ extends SceneTree
 ## the enemies were invisible while still charging and still killing, and it
 ## was read as a balance problem for days.
 
+## The floor under this suite's assertion count. See the same constant in
+## run_tests.gd for the full reasoning; the short version is that a runtime
+## error inside a check is non-fatal in GDScript, so the check stops there,
+## every assertion below it never runs, and this file prints "all passing" with
+## a smaller number nobody reads.
+##
+## **The smoke suite is where that actually happened.** A sibling game renamed a
+## HUD gauge, the suite read the old name off an untyped `main`, and the count
+## went from 402 to 387 with nothing red - fifteen assertions gone, including
+## "the gauge is on screen", which exists because its absence had already
+## shipped.
+##
+## This suite asserts 19 times today. The floor sits one below that so a
+## conditional branch cannot redden a freshly scaffolded game, and it is still
+## tight enough that any bail worth catching drops under it. Raise it as the
+## suite grows - the count is printed on every run.
+const MIN_ASSERTIONS := 18
+
 var _t := TestHarness.new()
 
 
@@ -150,6 +168,12 @@ func _live(items: Array[Dictionary]) -> int:
 
 func _finish() -> void:
 	print("")
+	if _t.failures.is_empty() and _t.checks < MIN_ASSERTIONS:
+		print("  smoke: %d assertions, but at least %d are expected." % [_t.checks, MIN_ASSERTIONS])
+		print("         Nothing is red, which is the point: a check errored part-way and")
+		print("         every assertion below it never ran. Fix that, do not lower the floor.")
+		quit(1)
+		return
 	if _t.failures.is_empty():
 		print("  smoke: %d assertions, all passing" % _t.checks)
 		quit(0)

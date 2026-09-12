@@ -65,6 +65,11 @@ try {
     $apk = [regex]::Match((Get-Content export_presets.cfg -Raw), 'export_path="([^"]+\.apk)"').Groups[1].Value
     Run 'export' 'build\check-export.log' @('--headless', '--path', '.', '--export-debug', 'Android', $apk)
   }
+  # The size guard now REFUSES a stale APK rather than measuring it, so this step
+  # goes red when build/ holds an APK older than something you have edited. That
+  # is the point - a sibling game's local check printed `size ok` for a whole
+  # session about a build nobody had made that day - and the fix is to run this
+  # script with -Export rather than to delete the APK.
   if ((Test-Path 'scripts\check_size.gd') -and (Get-ChildItem build -Filter *.apk -ErrorAction SilentlyContinue)) {
     Run 'size' 'build\check-size.log' @('--headless', '--path', '.', '--script', 'res://scripts/check_size.gd')
   }

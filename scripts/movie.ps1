@@ -83,7 +83,27 @@ try {
   }
   $gargs += $UserArgs
   Write-Host "==> filming $frames frames at $Fps fps -> $out"
-  Native { & $godot @gargs *> "$out\godot.log" }
+  ## **Unwrap the ErrorRecords and write UTF-8, or godot.log is not what Godot
+  ## printed** - and this is the file `skills/playtest/SKILL.md` tells the session
+  ## to read after a filmed run.
+  ##
+  ## `*> $log` sends a native command's stderr through PowerShell's error channel,
+  ## which renders each line as
+  ##   Godot_v4.7.2-stable_win64_console.exe : SCRIPT ERROR: ...
+  ## plus a `+ CategoryInfo` block, in UTF-16. So the error sweep at the bottom of
+  ## this script matched a different string than the one Godot wrote, and a
+  ## session reading the log for the three bugs sitting in the console found a
+  ## wall of PowerShell stack traces instead. `check.ps1` was fixed on 2026-09-10
+  ## and two digested lessons both ended "the same fix is still owed to
+  ## movie.ps1" - a note of that shape is a bug report filed against yourself.
+  ##
+  ## Calling ToString() on the ErrorRecord gives back the line Godot actually
+  ## wrote, and -Encoding utf8 makes the log greppable by anything else too.
+  Native {
+    & $godot @gargs 2>&1 |
+      ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.ToString() } else { $_ } } |
+      Out-File -FilePath "$out\godot.log" -Encoding utf8
+  }
   $exit = $LASTEXITCODE
   $pngs = Get-ChildItem $out -Filter 'frame*.png'
   if ($pngs.Count -lt 2) {

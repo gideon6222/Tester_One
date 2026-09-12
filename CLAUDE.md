@@ -23,6 +23,8 @@ scripts\check.ps1 -Export         # plus the debug APK
 scripts\movie.ps1 -Seconds 10 -Name idle
 scripts\device.ps1 install | launch | log | shot | record 30 | perf
 & $env:GODOT --path . --resolution 460x996 --script res://scripts/shot.gd -- 14.0
+& $env:GODOT --path . --resolution 460x996 --script res://scripts/shot.gd -- 45 hit   # a named STATE
+& $env:GODOT --path . --resolution 460x996 --script res://scripts/rects.gd            # control rects for a replay
 & $env:GODOT --path .              # the editor
 ```
 
@@ -39,7 +41,10 @@ scripts\device.ps1 install | launch | log | shot | record 30 | perf
 | `src/build_stamp.gd` | Overwritten by CI. Committed fallback says `dev` |
 | `src/changelog.gd` | `VERSION` and the player-facing history |
 | `test/policies.gd` | Scripted players. **The definition of "playing well"** |
-| `test/run_tests.gd` | Pure tests. No node, no viewport, no GPU |
+| `test/run_tests.gd` | Pure tests, discovered by GLOB. Fails on an empty glob and on an assertion count below `MIN_ASSERTIONS` |
+| `test/test_version.gd` | `VERSION` == `version/name` AND `version/code` in every export preset |
+| `test/test_sim_boundary.gd` | Standing rule 2 as a gate: reads every file under `src/sim` and fails on a Node, a Viewport, an input event or an unseeded roll |
+| `test/test_controls.gd` | **The handedness gate.** A real drag event through the real handler, asserting where the avatar lands ON SCREEN |
 | `test/run_smoke.gd` | Boots the real scene, plays it, drives through the level boundary |
 | `test/run_probe.gd` | Balance readings. Prints; never fails |
 | `test/harness.gd` | The assertions, deliberately small, with `FLOAT_EPS` |
@@ -48,7 +53,8 @@ scripts\device.ps1 install | launch | log | shot | record 30 | perf
 | `scripts/movie.ps1` | Film a deterministic run into a contact sheet |
 | `scripts/device.ps1` | The phone over adb |
 | `scripts/check.ps1` | The local gate in the order that fails fastest |
-| `scripts/shot.gd` | Screenshot at the PHONE's aspect ratio |
+| `scripts/shot.gd` | Screenshot at the PHONE's aspect ratio, at a time or in a named state, into `build/shot[_state].png` |
+| `scripts/rects.gd` | Every `Control`'s real global rect, in the space a replay is written in |
 | `scripts/check_size.gd` | APK size guard, fails in both directions |
 | `scripts/stamp.ps1`, `scripts/export_release.bat` | Build stamp; Play AAB with the quotes intact |
 | `.github/workflows/build.yml` | Tests, APK on every push, AAB on a `v*` tag |

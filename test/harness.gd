@@ -98,8 +98,20 @@ func dict_eq(actual: Dictionary, expected: Dictionary, msg: String) -> void:
 
 
 ## Runs every `test_*` method on each supplied script instance.
-static func run_all(suites: Array) -> int:
-	var t := TestHarness.new()
+##
+## `t` is optional and exists so a runner can read the assertion count back
+## afterwards - see MIN_ASSERTIONS in run_tests.gd. Passing nothing behaves
+## exactly as before.
+##
+## **A test method that asserts nothing fails.** It is the small, exact half of
+## the assertion floor: in GDScript a runtime error inside a check is non-fatal,
+## the method stops at that line and the harness carries on, so a check that
+## errors on its FIRST line leaves no trace at all except a count that nobody
+## reads. Zero assertions from a method named `test_` is never intentional -
+## either it bailed, or it is a placeholder pretending to be coverage.
+static func run_all(suites: Array, t: TestHarness = null) -> int:
+	if t == null:
+		t = TestHarness.new()
 	var total := 0
 	for suite in suites:
 		var suite_name: String = suite.get_script().resource_path.get_file()
@@ -109,7 +121,11 @@ static func run_all(suites: Array) -> int:
 				continue
 			total += 1
 			t.begin("%s > %s" % [suite_name, name.substr(5).replace("_", " ")])
+			var before := t.checks
 			suite.call(name, t)
+			if t.checks == before:
+				t.checks += 1
+				t._fail("asserted nothing - it either bailed on its first line or it is a stub")
 
 	print("")
 	if t.failures.is_empty():

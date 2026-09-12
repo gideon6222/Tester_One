@@ -1,6 +1,14 @@
+class_name Main
 extends Node3D
 
 ## The shell. Reads `Sim` and draws it; never decides anything.
+##
+## It carries a `class_name` so a harness can hold it in a TYPED local. That is
+## not decoration: a sibling game renamed a HUD gauge, its smoke suite read the
+## old name off an untyped `var main = scene.instantiate()`, and the missing
+## property was a non-fatal runtime error that stopped that check where it stood
+## and deleted fifteen assertions without turning anything red. Typed, the same
+## rename is a parse error before the suite runs.
 ##
 ## The scene file next to this is four lines on purpose - one node with this
 ## script. Everything visible is built here in code rather than laid out in the
@@ -16,6 +24,25 @@ extends Node3D
 ## scene loaded from here - not merged into this one.
 
 const POOL := 64  ## per entity kind; the horizon holds far fewer than this
+
+## THE DIRECTION OF TRAVEL, named once, because five games have shipped inverted.
+##
+## Godot's camera looks down its own -Z, so a chase camera following a track laid
+## toward world +Z has its right-hand basis vector pointing at world -X: screen
+## right IS world -X, and every drag then moves the avatar the wrong way while
+## every world-coordinate assertion in the suite goes on passing. Captain Run,
+## Coreward (twice), Wrecking Crew, Stillwater and Wildform all shipped that way,
+## and so did this template: the placeholder game ran toward +Z, its camera's
+## `basis.x` was (-1, 0, 0), and dragging right sent the cube left.
+##
+## Laying the track toward -Z makes screen right world +X with no sign flip
+## anywhere near the input, which is what CRAFT.md prescribes. `Sim` counts
+## distance as a positive number going forward and knows nothing about any of
+## this; the multiplication below is the ONE place the simulation's forward
+## becomes a world axis, so there is one place to be wrong instead of nine.
+##
+## `test/test_controls.gd` is the gate. Change this sign and it goes red.
+const TRACK_Z := -1.0
 
 var sim: Sim
 
@@ -328,7 +355,7 @@ func freeze(start_level: int = 1) -> void:
 # --- drawing --------------------------------------------------------------
 
 func _sync() -> void:
-	var z := sim.distance
+	var z := sim.distance * TRACK_Z
 	_player.position = Vector3(sim.x, 0.45, z)
 
 	# Transform3D.looking_at rather than Node3D.look_at. The node method
@@ -337,8 +364,11 @@ func _sync() -> void:
 	# that case, because add_child() during SceneTree._initialize() does not
 	# put anything in the tree until the first frame. This is pure maths and
 	# works anywhere.
-	var eye := Vector3(sim.x * 0.35, 5.4, z - 9.0)
-	var focus := Vector3(sim.x * 0.2, 1.0, z + 10.0)
+	# Nine metres BEHIND the player and ten metres AHEAD of them, both expressed
+	# along the direction of travel rather than along +Z, so the camera cannot
+	# end up on the wrong side of the avatar if the track is ever turned round.
+	var eye := Vector3(sim.x * 0.35, 5.4, z - 9.0 * TRACK_Z)
+	var focus := Vector3(sim.x * 0.2, 1.0, z + 10.0 * TRACK_Z)
 	_cam.transform = Transform3D(Basis.IDENTITY, eye).looking_at(focus, Vector3.UP)
 
 	_road.position = Vector3(0, -0.2, z)
@@ -369,7 +399,7 @@ func _write(mmi: MultiMeshInstance3D, items: Array[Dictionary], y: float) -> voi
 		if item.taken:
 			continue
 		mmi.multimesh.set_instance_transform(
-			n, Transform3D(Basis.IDENTITY, Vector3(item.x, y, item.z))
+			n, Transform3D(Basis.IDENTITY, Vector3(item.x, y, item.z * TRACK_Z))
 		)
 		n += 1
 	mmi.multimesh.visible_instance_count = n
@@ -379,13 +409,46 @@ func _write(mmi: MultiMeshInstance3D, items: Array[Dictionary], y: float) -> voi
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
-		_dragging = event.pressed
+		_dragging = (event as InputEventScreenTouch).pressed
 	elif event is InputEventMouseButton:
-		_dragging = event.pressed
+		_dragging = (event as InputEventMouseButton).pressed
 	elif event is InputEventScreenDrag or (event is InputEventMouseMotion and _dragging):
-		# Relative drag, not absolute position: the thumb is never where the
-		# player is looking, and an absolute mapping makes the first touch of
-		# every run yank the player sideways.
-		var dx: float = event.relative.x
-		var span := float(get_viewport().get_visible_rect().size.x)
-		sim.steer_to(sim.target_x + dx / span * Tuning.LANE_HALF_WIDTH * 3.4)
+		drag_by(event, float(get_viewport().get_visible_rect().size.x))
+
+
+## THE ONE WAY A DRAG REACHES THE SIMULATION, and it is a method rather than the
+## body of `_unhandled_input` for one reason: so a test can drive it.
+##
+## `_unhandled_input` needs a viewport to know how wide the screen is, and a
+## headless suite has no reliable viewport at the moment it runs. Everything
+## else about the gesture - reading the delta off a real event, the sign, the
+## scale, the clamp inside `steer_to` - lives here, where a test hands it a real
+## `InputEventScreenDrag` and a stated width and asserts where the avatar ends
+## up on screen. See `test/test_controls.gd`.
+##
+## **A test that calls `sim.steer_to()` instead is not a test of the control.**
+## `steer_to` takes a world X and moves the avatar to that world X correctly,
+## including on a game whose controls are inverted - the bug lives in the two
+## steps either side of it, and a suite made entirely of policies has no
+## coverage of either. That is how five games in this studio shipped backwards
+## with four thousand assertions passing.
+##
+## Relative, not absolute: the thumb is never where the player is looking, and
+## an absolute mapping makes the first touch of every run yank the player
+## sideways.
+func drag_by(event: InputEvent, span: float) -> void:
+	# Loud, not silent. A zero width means the viewport has not resolved yet, and
+	# `dx / 0` would steer the avatar to infinity and clamp it to the lane edge -
+	# a plausible-looking movement with no relationship to the thumb. `push_error`
+	# is what makes check.ps1 fail on it rather than a quiet `return`.
+	if span <= 0.0:
+		push_error("drag_by was given a screen width of %f - the viewport is not resolved" % span)
+		return
+	var dx := 0.0
+	if event is InputEventScreenDrag:
+		dx = (event as InputEventScreenDrag).relative.x
+	elif event is InputEventMouseMotion:
+		dx = (event as InputEventMouseMotion).relative.x
+	else:
+		return
+	sim.steer_to(sim.target_x + dx / span * Tuning.LANE_HALF_WIDTH * 3.4)
