@@ -87,5 +87,35 @@ try {
   if ((Test-Path 'scripts\check_size.gd') -and (Get-ChildItem build -Filter *.apk -ErrorAction SilentlyContinue)) {
     Run 'size' 'build\check-size.log' @('--headless', '--path', '.', '--script', 'res://scripts/check_size.gd')
   }
+  # THE FRAMEWORK'S OWN INVARIANTS, checked every time the gate runs.
+  #
+  # Everything above tests the game. This tests the things that are true of every
+  # repo here and that nothing else notices when they rot: the export guards, the
+  # .gitignore form that keeps build/.gdignore committable, version/code against
+  # the changelog, template script drift, src/sim purity, the inbox backlog.
+  #
+  # It is here rather than in a skill because a sentence in a skill is what the
+  # controls rule was, and that rule sat in three files while the same bug
+  # shipped six times. The gate runs before every commit; a rule that runs with
+  # it is a rule that fires.
+  #
+  # -Quiet prints only WARN and FAIL and skips the slow cross-repo passes, so it
+  # costs a second or two. A FAIL here is a framework problem, not a game one,
+  # and the line says which. If gamedev-notes is not on this machine the step is
+  # skipped rather than failing - a missing knowledge base is not a broken game.
+  $doctor = Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'gamedev-notes\scripts\doctor.ps1'
+  if (Test-Path $doctor) {
+    $slug = Split-Path (Split-Path $PSScriptRoot -Parent) -Leaf
+    $t = [Diagnostics.Stopwatch]::StartNew()
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $doctor -Repo $slug -Quiet
+    $dcode = $LASTEXITCODE
+    Write-Host ("{0,-14} {1}  {2:N1}s  exit {3}" -f 'framework', ($(if ($dcode -eq 0) { 'ok  ' } else { 'FAIL' })), $t.Elapsed.TotalSeconds, $dcode)
+    if ($dcode -ne 0) {
+      Write-Host "---- the FAIL lines above are about the framework, not this game's code" -ForegroundColor Yellow
+      exit 1
+    }
+  } else {
+    Write-Host ("{0,-14} skipped - no gamedev-notes on this machine" -f 'framework')
+  }
   Write-Host "all green" -ForegroundColor Green
 } finally { Pop-Location }
