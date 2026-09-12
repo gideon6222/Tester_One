@@ -17,9 +17,66 @@ var failures: Array[String] = []
 var checks: int = 0
 var _current: String = ""
 
+## THE ENGINE'S OWN ERRORS, COUNTED PER TEST.
+##
+## A runtime error inside a test body is non-fatal in GDScript: the method stops
+## at that line, the harness carries on, and every assertion below the error
+## silently never runs. On stillwater a test called a method that did not exist,
+## the runner printed "all passing", and reintroducing the bug the test was
+## written for STILL passed, because the only check that could have caught it
+## was unreachable. The assertion floor and the asserted-nothing rule are
+## canaries; this is the instrument. A `Logger` is handed every error the engine
+## prints - a script error, a `push_error`, a failed load - so a test whose body
+## raised one FAILS with the error's own text, whatever its assertions said.
+## Warnings are not errors and are left alone.
+class _Errors extends Logger:
+	var n := 0
+	var first := ""
 
+	func _log_error(function: String, file: String, line: int, code: String, rationale: String,
+			_editor_notify: bool, error_type: int, _backtraces: Array[ScriptBacktrace]) -> void:
+		if error_type == Logger.ERROR_TYPE_WARNING:
+			return
+		n += 1
+		if first == "":
+			var what := code
+			if rationale != "":
+				what = "%s: %s" % [code, rationale] if code != "" else rationale
+			first = "%s (%s:%d in %s)" % [what, file.get_file(), line, function]
+
+var _errors := _Errors.new()
+var _errors_at := 0
+
+
+func _init() -> void:
+	OS.add_logger(_errors)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		OS.remove_logger(_errors)
+
+
+## Opens a test. Closes the one before it, so a runner that only ever calls
+## `begin` (the smoke suite) still gets every body's errors attributed to it -
+## except the last, which is why `end()` exists.
 func begin(test_name: String) -> void:
+	end()
 	_current = test_name
+	_errors_at = _errors.n
+	_errors.first = ""
+
+
+## Closes the current test: an engine error raised during its body is a failure
+## of that test. Call once after the last test; `begin` calls it for the rest.
+func end() -> void:
+	if _current == "":
+		return
+	var raised := _errors.n - _errors_at
+	if raised > 0:
+		_fail("the body raised %d engine error%s, and nothing after the first one ran: %s" % [
+			raised, "" if raised == 1 else "s", _errors.first])
+	_current = ""
 
 
 func _fail(msg: String) -> void:
@@ -126,6 +183,7 @@ static func run_all(suites: Array, t: TestHarness = null) -> int:
 			if t.checks == before:
 				t.checks += 1
 				t._fail("asserted nothing - it either bailed on its first line or it is a stub")
+	t.end()
 
 	print("")
 	if t.failures.is_empty():

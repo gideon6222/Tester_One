@@ -167,6 +167,9 @@ func _live(items: Array[Dictionary]) -> int:
 
 
 func _finish() -> void:
+	# Closes the last check, so an engine error raised inside it fails it like
+	# any other; `begin` closes every one before it.
+	_t.end()
 	print("")
 	if _t.failures.is_empty() and _t.checks < MIN_ASSERTIONS:
 		print("  smoke: %d assertions, but at least %d are expected." % [_t.checks, MIN_ASSERTIONS])
