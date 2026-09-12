@@ -87,7 +87,13 @@ switch ($Action.ToLower()) {
   }
   'uninstall' { Adb uninstall $pkg }
   'launch' {
-    Adb shell am start -W -S -n $component | Out-Null
+    # **Quoted, because PowerShell binds parameters before it hands anything to
+    # adb.** `-W` prefix-matches the common parameters -WarningAction and
+    # -WarningVariable, so an unquoted `-W` here is an AmbiguousParameter error
+    # against device.ps1 itself and adb is never reached. `launch` had never
+    # once worked. Quoting makes each flag a value rather than a parameter name;
+    # any adb flag starting with w, v, d or c needs the same treatment.
+    Adb shell am start '-W' '-S' '-n' $component | Out-Null
     Write-Host "launched $component"
   }
   'log' {
@@ -111,18 +117,62 @@ switch ($Action.ToLower()) {
     Sheet $f (Join-Path $outDir "$stamp-sheet.png")
   }
   'perf' {
+    # **SurfaceFlinger, not gfxinfo.** `dumpsys gfxinfo` instruments HWUI - the
+    # Android View hierarchy - and a Godot game draws to its own SurfaceView
+    # instead. Measured on wildform: gfxinfo reported `Total frames rendered: 0`
+    # and percentiles of 4950 ms, which is its no-data sentinel, after a run that
+    # had just drawn two thousand frames. Every percentile this studio has ever
+    # printed for a Godot game came from that, and meant nothing.
+    #
+    # `--timestats` measures the layer the game actually presents to, so the
+    # numbers below are the frames that reached the panel.
+    Adb shell dumpsys SurfaceFlinger --timestats -disable -clear | Out-Null
+    Adb shell dumpsys SurfaceFlinger --timestats -enable | Out-Null
     if ($Seconds -gt 0) {
-      Adb shell dumpsys gfxinfo $pkg reset | Out-Null
       Write-Host "play for $Seconds s..."
       Start-Sleep -Seconds $Seconds
+    } else {
+      Write-Host "measuring for 20 s (pass -Seconds N for longer)..."
+      Start-Sleep -Seconds 20
     }
-    $g = Native { & $adb shell dumpsys gfxinfo $pkg }
-    $g | Select-String -Pattern 'Total frames|Janky|percentile|Number Missed Vsync|Number Slow' | ForEach-Object { Write-Host "   $($_.Line.Trim())" }
-    Write-Host "   (gfxinfo instruments HWUI; if the frame count is tiny, read Engine.get_frames_per_second() from the game's own log instead)"
+    $ts = (Native { & $adb shell dumpsys SurfaceFlinger --timestats -dump }) -join "`n"
+    Adb shell dumpsys SurfaceFlinger --timestats -disable | Out-Null
+
+    # The game's own layer, and only it: SurfaceFlinger reports every layer on
+    # the device and the wallpaper is not what we are measuring.
+    $block = ($ts -split '(?m)^layerName = ') | Where-Object { $_ -match [regex]::Escape($pkg) } | Select-Object -First 1
+    if (-not $block) {
+      Write-Host "   no SurfaceFlinger layer for $pkg - is the game in the foreground?" -ForegroundColor Yellow
+    } else {
+      foreach ($k in 'totalFrames', 'droppedFrames', 'jankyFrames', 'averageFPS') {
+        if ($block -match "(?m)^\s*$k\s*=\s*(\S+)") { Write-Host ("   {0,-14} {1}" -f $k, $Matches[1]) }
+      }
+      # Percentiles, derived from the present-to-present histogram. A frame time
+      # is the gap between one frame reaching the panel and the next, which is
+      # the number a player feels - not how long the CPU spent on it.
+      if ($block -match '(?s)present2present histogram is as below:\s*(.+?)
+\w') {
+        $pairs = [regex]::Matches($Matches[1], '(\d+)ms=(\d+)')
+        $total = 0; foreach ($m in $pairs) { $total += [int]$m.Groups[2].Value }
+        if ($total -gt 0) {
+          $line = @()
+          foreach ($q in 50, 90, 95, 99) {
+            $want = [math]::Ceiling($total * $q / 100.0); $run = 0; $ms = '?'
+            foreach ($m in $pairs) {
+              $run += [int]$m.Groups[2].Value
+              if ($run -ge $want) { $ms = $m.Groups[1].Value; break }
+            }
+            $line += "p$q ${ms}ms"
+          }
+          Write-Host "   frame time     $($line -join '   ')  over $total frames"
+          Write-Host "   (a 120 Hz panel is 8 ms a frame; 60 Hz is 16)"
+        }
+      }
+    }
+
     $t = try { & $adb shell dumpsys thermalservice 2>$null } catch { @() }
-    $t | Select-String -Pattern 'Thermal Status|mStatus|CPU|GPU|SKIN' | Select-Object -First 8 | ForEach-Object { Write-Host "   $($_.Line.Trim())" }
-    $fps = Native { & $adb logcat -d -s godot } | Select-String -Pattern 'fps' | Select-Object -Last 3
-    if ($fps) { $fps | ForEach-Object { Write-Host "   $($_.Line)" } }
+    $t | Select-String -Pattern 'Thermal Status|mName=AP|mName=SKIN|mName=BAT' | Select-Object -First 6 | ForEach-Object { Write-Host "   $($_.Line.Trim())" }
+    Write-Host "   (Thermal Status 0 is no throttling; 1+ means the phone is backing off)"
   }
   'tap' { Adb shell input tap $Rest[0] $Rest[1] }
   'swipe' { Adb shell input swipe @Rest }
