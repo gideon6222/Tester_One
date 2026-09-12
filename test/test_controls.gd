@@ -35,18 +35,18 @@ extends RefCounted
 ##
 ## **What this file does NOT assert, and why.** It never adds the scene to a
 ## tree, so it never calls `get_viewport()`. Whether `add_child()` during
-## `SceneTree._initialize()` puts a node in the tree before the first processed
-## frame is a question two files in this knowledge base currently answer
-## differently, and a gate that depends on an unsettled fact is a gate that goes
-## red on a fresh scaffold for a reason that has nothing to do with the game.
-## Everything below is arithmetic on objects that exist without a tree.
+## `SceneTree._initialize()` does NOT put a node in the tree before the first
+## processed frame - `is_inside_tree()` is false there, measured, and GODOT.md
+## carries the rule. Everything below is therefore arithmetic on objects that
+## exist without a tree, which is what lets this gate run in the pure suite.
 ##
-## Consequently the drag goes through `Main.drag_by(event, span)` - the method
+## The drag goes through `Main.drag_by(event, span)`, the method
 ## `_unhandled_input` itself calls, given the width the viewport would have
-## supplied - and the thumb pad goes through `_read_pad(local)`, one step short
-## of `_on_pad_input`, because `Control.accept_event()` off the tree is the same
-## unsettled question. The pad half is therefore the weaker half; the drag half
-## is the one the five games needed.
+## supplied. The thumb pad goes through `_read_pad(local)` rather than
+## `_on_pad_input`, because `Control.accept_event()` is wrapped in
+## `if (is_inside_tree())` upstream and is a silent no-op off the tree - so the
+## handler is reachable and only the event dispatch is not. Both halves drive
+## the real reader; neither asserts the value the control would have produced.
 
 
 ## A phone's width in project pixels. The project's base viewport is 1080 wide
