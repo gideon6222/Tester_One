@@ -250,7 +250,11 @@ switch ($act) {
   }
   'tap' { Adb shell input tap $Rest[0] $Rest[1] }
   'swipe' { Adb shell input swipe @Rest }
-  'back' { Adb shell input keyevent KEYCODE_BACK }
+  # `back N` sends N presses in ONE input call, a few ms apart, which is the only
+  # way to exercise a game's double-press debounce: separate device.ps1 calls
+  # land about two seconds apart (measured on snowball: 2.3 s), so two of them
+  # test the one-layer-per-press rule and never the debounce.
+  'back' { $n = if ($Rest.Count -gt 0) { [Math]::Max(1, [int]$Rest[0]) } else { 1 }; Adb shell input keyevent (@('KEYCODE_BACK') * $n) }
   'home' { Adb shell input keyevent KEYCODE_HOME }
   'resume' { Adb shell am start -n $component | Out-Null }
   'pull-replay' {
