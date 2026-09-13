@@ -192,16 +192,26 @@ func _drive_with_a_thumb() -> void:
 		d.relative = drag
 		get_viewport().push_input(d, true)
 
-	# The second thumb. Only the EDGES become events: a point where there was
-	# none is a press, none where there was a point is a release, and a point
-	# that moved to a different control is a release now and a press next frame,
-	# because a thumb does not slide from one button onto another.
+	# The second thumb. The EDGES become presses and releases: a point where
+	# there was none is a press, none where there was a point is a release. A
+	# point that MOVED while down is a drag on the same finger - a thumb sliding
+	# a control - so a game with a slider or a stick under this thumb gets the
+	# real gesture. (A first cut lifted and re-pressed on a moved point, on the
+	# theory that a thumb does not slide from one button onto another; it also
+	# does not lift off a slider it is dragging, and that is the case that
+	# matters. A game whose buttons are far apart never sees a drag between
+	# them because the bot never asks for one.)
 	if not _bot.has_method("bot_touch_pixels"):
 		return
 	var at: Vector2 = _bot.bot_touch_pixels(_policy, _policy_mem, rect.size)
 	var want_down := at.is_finite()
-	if want_down and _bot_down and at.distance_to(_bot_down_at) > 1.0:
-		_lift_thumb()
+	if want_down and _bot_down and at.distance_to(_bot_down_at) > 0.5:
+		var d := InputEventScreenDrag.new()
+		d.index = TOUCH_FINGER
+		d.position = at
+		d.relative = at - _bot_down_at
+		_bot_down_at = at
+		get_viewport().push_input(d, true)
 		return
 	if want_down == _bot_down:
 		return
