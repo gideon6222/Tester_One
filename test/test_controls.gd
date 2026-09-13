@@ -86,7 +86,7 @@ func _drag(dx: float) -> InputEventScreenDrag:
 
 
 ## Where the avatar is ON SCREEN, as a signed number: positive is right of the
-## centre line, negative is left of it.
+## center line, negative is left of it.
 ##
 ## `transform.affine_inverse() * p` puts the avatar in the camera's own space,
 ## where +X is screen right by definition. That is the whole of the projection
@@ -151,8 +151,8 @@ func test_a_drag_to_the_left_mirrors_it(t: TestHarness) -> void:
 func test_screen_right_is_world_plus_x(t: TestHarness) -> void:
 	var main := _game()
 	var right: Vector3 = main._cam.transform.basis.x
-	# Normalised first, because a basis carries the node's scale and a dot
-	# product against an unnormalised axis reads low for a perfectly correct
+	# Normalized first, because a basis carries the node's scale and a dot
+	# product against an unnormalized axis reads low for a perfectly correct
 	# camera - which is how the same assertion was once "fixed" by loosening it.
 	t.approx(right.length(), 1.0, 0.001,
 		"the camera basis is scaled (%.3f), so the assertion below is measuring scale as well as direction"
@@ -164,7 +164,7 @@ func test_screen_right_is_world_plus_x(t: TestHarness) -> void:
 
 
 ## The pad is absolute: the thumb's position IS the value. Right of the pad's
-## centre must therefore put the avatar right of the screen's centre.
+## center must therefore put the avatar right of the screen's center.
 func test_the_thumb_pad_pushes_the_avatar_the_way_the_thumb_went(t: TestHarness) -> void:
 	var main := _game()
 	var r := Main.PAD * 0.5

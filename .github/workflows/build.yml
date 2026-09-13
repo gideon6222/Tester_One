@@ -16,7 +16,7 @@ jobs:
     name: Headless tests
     runs-on: ubuntu-latest
     # The engine version is pinned to the same one the game is developed
-    # against. Lighting, physics defaults and export template behaviour all
+    # against. Lighting, physics defaults and export template behavior all
     # move between minor releases; a floating version means CI is testing a
     # different game from the one on the desk.
     container:

@@ -20,7 +20,7 @@ curl -s "https://api.polyhaven.com/files/<id>"          # download URLs and exac
 curl -sL -o assets/<name>_1k.hdr \
   "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/<name>_1k.hdr"
 
-# ambientCG: CC0 PBR textures. Take the NORMAL map and leave the colour map -
+# ambientCG: CC0 PBR textures. Take the NORMAL map and leave the color map -
 # that half is style-neutral and keeps the hand-tuned palette intact.
 curl -s "https://ambientcg.com/api/v2/full_json?type=Material&q=concrete&limit=20"
 curl -sL -o m.zip "https://ambientcg.com/get?file=Concrete034_1K-JPG.zip"

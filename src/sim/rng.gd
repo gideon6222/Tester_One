@@ -13,7 +13,7 @@ extends RefCounted
 ## it comes within magnet reach, which decides when its score lands. On the web
 ## game, leaving that on Math.random made the whole-run golden test fail about
 ## one run in ten - passing alone, failing under load - which is the worst
-## possible behaviour for the test every other change is checked against.
+## possible behavior for the test every other change is checked against.
 ##
 ## The rule that came out of it: **anything that decides *when* something
 ## happens is simulation, however decorative it looks.** Cosmetic jitter with

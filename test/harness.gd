@@ -124,7 +124,7 @@ func lt(actual: float, bound: float, msg: String) -> void:
 ## It earns its place a second time in CI. Goldens are recorded on Windows and
 ## checked on a Linux runner, and identical IEEE arithmetic across two
 ## toolchains is something people assume rather than something promised. A
-## tolerance a thousand times finer than the snap cannot hide a behaviour
+## tolerance a thousand times finer than the snap cannot hide a behavior
 ## change - the simulation would have to differ by less than a micron - and it
 ## stops the whole suite becoming a platform detector.
 const FLOAT_EPS := 1e-6

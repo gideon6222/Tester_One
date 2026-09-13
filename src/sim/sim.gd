@@ -25,7 +25,7 @@ signal level_finished(won: bool)
 var level: int = 1
 var lives: int = Tuning.START_LIVES
 var score: int = 0
-var distance: float = 0.0        ## metres travelled this level
+var distance: float = 0.0        ## meters traveled this level
 var x: float = 0.0               ## lateral position
 var target_x: float = 0.0        ## where the player is steering to
 var over: bool = false

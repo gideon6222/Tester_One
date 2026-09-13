@@ -94,7 +94,7 @@ func _initialize() -> void:
 ## The controls must be ANCHORED to the viewport, never placed at a literal
 ## coordinate.
 ##
-## A structural assertion rather than a behavioural one, because the bug it
+## A structural assertion rather than a behavioral one, because the bug it
 ## guards against is invisible at the size the tests run. The project stretches
 ## with `aspect = "expand"`, which keeps the base WIDTH and extends the HEIGHT -
 ## so on a 19.5:9 phone the canvas is about 1080x2340 while the base is

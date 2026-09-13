@@ -45,7 +45,7 @@ const DODGING := {
 
 ## Asserted directly, and separately from the goldens below, so that when they
 ## fail together it is obvious which is the cause. A golden mismatch with this
-## passing is a real behaviour change; a golden mismatch with this failing is
+## passing is a real behavior change; a golden mismatch with this failing is
 ## not the golden's fault.
 func test_the_same_twenty_seconds_replays_identically(t: TestHarness) -> void:
 	t.dict_eq(_play(false), _play(false), "two passive runs differed - the simulation is not deterministic")

@@ -57,7 +57,7 @@ const FORBIDDEN := [
 
 ## `FileAccess` and `DirAccess` are deliberately NOT gate tokens: INDEX.md rule 2
 ## settles that the wall excludes the renderer, not the disk - `src/sim` may use
-## them under `user://`, provided serialisation is a pure state/Dictionary pair
+## them under `user://`, provided serialization is a pure state/Dictionary pair
 ## round-tripped by a test that touches no file.
 
 
@@ -150,13 +150,13 @@ func _uses(code: String, token: String) -> bool:
 	return false
 
 
-## The whole gate. One assertion per file, listing every offence in it, so a
+## The whole gate. One assertion per file, listing every offense in it, so a
 ## file with three problems is one failure that names all three rather than the
 ## first one three times.
 func test_nothing_under_src_sim_touches_the_engine(t: TestHarness) -> void:
 	for path in _sim_files():
 		var text := FileAccess.get_file_as_string(path)
-		var offences: Array[String] = []
+		var offenses: Array[String] = []
 		var state := {"quote": ""}
 		var lines := text.split("\n")
 		for idx in lines.size():
@@ -165,8 +165,8 @@ func test_nothing_under_src_sim_touches_the_engine(t: TestHarness) -> void:
 				var token: String = entry[0]
 				var why: String = entry[1]
 				if _uses(code, token):
-					offences.append("      %s:%d  uses `%s` - %s" % [path, idx + 1, token, why])
-		t.eq(offences.size(), 0, "%s crosses the simulation boundary\n%s" % [path, "\n".join(offences)])
+					offenses.append("      %s:%d  uses `%s` - %s" % [path, idx + 1, token, why])
+		t.eq(offenses.size(), 0, "%s crosses the simulation boundary\n%s" % [path, "\n".join(offenses)])
 
 
 ## A wall around an empty room passes every test ever written about it.

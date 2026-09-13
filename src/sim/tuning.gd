@@ -9,10 +9,10 @@ extends RefCounted
 ## without booting a game.
 
 # --- the track ---
-const LANE_HALF_WIDTH := 2.6      ## how far from centre the player may go
-const FORWARD_SPEED := 12.0       ## metres per second at level 1
+const LANE_HALF_WIDTH := 2.6      ## how far from center the player may go
+const FORWARD_SPEED := 12.0       ## meters per second at level 1
 const STEER_RATE := 9.0           ## exponential smoothing rate toward the target lane
-const CHUNK := 8.0                ## metres between spawn decisions
+const CHUNK := 8.0                ## meters between spawn decisions
 const CHUNKS_PER_LEVEL := 40      ## a level is 40 chunks, then the finish
 
 # --- the player ---

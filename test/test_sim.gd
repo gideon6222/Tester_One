@@ -1,6 +1,6 @@
 extends RefCounted
 
-## Behaviour of the simulation, tested by playing it - with no window, no GPU
+## Behavior of the simulation, tested by playing it - with no window, no GPU
 ## and no scene tree, because `Sim` has no idea any of those exist.
 
 

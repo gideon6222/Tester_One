@@ -5,7 +5,7 @@ extends RefCounted
 ##
 ## INDEX.md standing rule 2: the simulation wall excludes the renderer, not the
 ## disk. `src/sim` MAY touch `user://`. What it may not do is make the disk the
-## only way to test a save - so serialisation is a pure pair, `Sim` to
+## only way to test a save - so serialization is a pure pair, `Sim` to
 ## `Dictionary` and back, asserted by `test/test_save.gd` with no file open
 ## anywhere in it. `write_file` and `read_file` at the bottom are a dozen lines
 ## of wrapper over that pair, and nothing in the game calls them yet: the rule's
@@ -16,7 +16,7 @@ extends RefCounted
 ## difference between this file and a save that "works": a partial restore
 ## succeeds silently, and the player finds out three sessions later that their
 ## run resumes one obstacle to the left. A missing key, a key of the wrong type,
-## a version this build does not know and a key this build does not recognise
+## a version this build does not know and a key this build does not recognize
 ## are all refusals, and a refusal leaves the `Sim` exactly as it was - the
 ## validation runs to completion BEFORE the first assignment, so a save that is
 ## rejected half way through cannot leave a half-loaded game standing.
@@ -111,7 +111,7 @@ static func from_dict(data: Dictionary) -> Sim:
 ##
 ## The last one matters as much as the first: a save holding a key this build
 ## does not know was written by a build that owned more state than this one can
-## restore, and loading the part we recognise is the partial restore this file
+## restore, and loading the part we recognize is the partial restore this file
 ## exists to refuse.
 static func _valid(data: Dictionary) -> bool:
 	if not _is_int(data.get("version")) or int(data["version"]) != VERSION:

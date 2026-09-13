@@ -362,9 +362,9 @@ func _sync() -> void:
 	# requires the node to be inside the tree and errors if it is not - and a
 	# headless harness that adds this scene and steps it immediately is exactly
 	# that case, because add_child() during SceneTree._initialize() does not
-	# put anything in the tree until the first frame. This is pure maths and
+	# put anything in the tree until the first frame. This is pure math and
 	# works anywhere.
-	# Nine metres BEHIND the player and ten metres AHEAD of them, both expressed
+	# Nine meters BEHIND the player and ten meters AHEAD of them, both expressed
 	# along the direction of travel rather than along +Z, so the camera cannot
 	# end up on the wrong side of the avatar if the track is ever turned round.
 	var eye := Vector3(sim.x * 0.35, 5.4, z - 9.0 * TRACK_Z)

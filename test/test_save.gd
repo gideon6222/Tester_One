@@ -3,7 +3,7 @@ extends RefCounted
 ## The save pair, round-tripped with no file anywhere in it.
 ##
 ## INDEX.md standing rule 2 settles that `src/sim` may touch `user://`, and that
-## what it may NOT do is make the disk the only way to test a save: serialisation
+## what it may NOT do is make the disk the only way to test a save: serialization
 ## is a pure `state -> Dictionary -> state` pair, and the file call is a thin
 ## wrapper over it. This suite is the half of that rule the template could not
 ## enforce until `src/sim/save.gd` existed - `Sim.state()` is a lossy HUD
@@ -51,7 +51,7 @@ func test_a_played_run_survives_the_trip_and_carries_on_the_same(t: TestHarness)
 	t.gt(float(played.pickups.size()), 0.0, "no pickup is live - the entity half of the trip is untested")
 	t.gt(float(played._chunk_spawned), 5.0, "the spawn cursor never moved")
 	t.approx(played.target_x, 1.3, 0.0001, "the tail did not steer")
-	t.gt(played.x, 0.1, "the tail did not move the player off centre")
+	t.gt(played.x, 0.1, "the tail did not move the player off center")
 
 	var data := SimSave.to_dict(played)
 	var restored := Sim.new()
@@ -177,7 +177,7 @@ func test_the_save_covers_every_field_an_entity_owns(t: TestHarness) -> void:
 ## "the state I loaded is not the state I saved".
 func test_the_dictionary_does_not_alias_the_live_entities(t: TestHarness) -> void:
 	var s := Sim.new()
-	# Planted at four metres: closer than the first chunk that spawns anything
+	# Planted at four meters: closer than the first chunk that spawns anything
 	# (chunk 2, at sixteen), so it is certainly the first thing hit and no
 	# immunity window can be running when the player arrives.
 	var planted: Array[Dictionary] = [{"x": 0.0, "z": 4.0, "taken": false}]

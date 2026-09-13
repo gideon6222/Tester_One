@@ -45,7 +45,7 @@ good and either would be a reasonable swap. The reason for not using them on day
 to prove the *pipeline* — headless run, real assertions, non-zero exit, CI gate — with
 nothing to download and no chance of an addon lagging an engine release.
 
-**The signal to switch** is the harness growing doubles, mocks, parameterised tests or
+**The signal to switch** is the harness growing doubles, mocks, parameterized tests or
 scene-testing helpers. At that point it is reimplementing GUT badly and should be replaced
 by it.
 
@@ -59,7 +59,7 @@ Worth knowing before writing any other headless harness in Godot:
   never terminates. Fix: an idempotent `_ensure_booted()` rather than a rule about call
   order, because a rule about call order is something every future test has to remember.
 - `Node3D.look_at` errors when the node is not inside the tree — which is that same case.
-  `Transform3D.looking_at` is pure maths and works anywhere. The scene now uses it and is
+  `Transform3D.looking_at` is pure math and works anywhere. The scene now uses it and is
   better for it.
 
 ## What the first real game built from this taught it
@@ -88,7 +88,7 @@ something the first time:
 
 Two things it also proved that are not code:
 
-- **The asset rules changed.** "Nothing modelled is worth importing" was written when every
+- **The asset rules changed.** "Nothing modeled is worth importing" was written when every
   kilobyte was a download over mobile data. A native APK has no such constraint: an HDRI and
   a concrete PBR set cost 1.6 MB and took the APK from 27.1 to 29.7. See `ASSETS.md`.
 - **Physics may be cosmetic and nothing else.** Mobile guidance is 10-20 active rigid bodies,
@@ -120,7 +120,7 @@ Two things it also proved that are not code:
 
 Direct APK is the fast path: CI attaches a signed APK to a GitHub Release, tap the link
 on the phone, install. Note that Google's developer verification is rolling out — the
-free limited-distribution tier covers up to 20 authorised devices at no cost, which is
+free limited-distribution tier covers up to 20 authorized devices at no cost, which is
 the right tier for one phone and a few friends.
 
 Play needs: the $25 account, developer verification, Play App Signing, the app content
