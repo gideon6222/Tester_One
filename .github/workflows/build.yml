@@ -2,8 +2,23 @@ name: Test and build
 
 on:
   push:
+    # A private repo meters Actions minutes, so a run that could not change the
+    # build is a run the studio pays for and gets nothing from. Prose-only pushes
+    # are the common case: a lesson, a changelog line, a NOTES entry.
+    # pull_request and workflow_dispatch are deliberately NOT filtered, so a
+    # release can always be forced by hand from the Actions tab.
+    paths-ignore:
+      - '**/*.md'
+      - 'playtests/**'
+      - 'NOTES.md'
   pull_request:
   workflow_dispatch:
+
+# A second push supersedes the first instead of paying for both. Three commits in
+# a minute used to mean three full Android builds; now it means one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write   # needed to attach the APK to a release
@@ -166,16 +181,24 @@ jobs:
       - name: Size guard
         run: godot --headless --script res://scripts/check_size.gd
 
+      # Branches only. On main the very next step publishes a release holding the
+      # identical APK, so an artifact there is a second copy of the same file
+      # counting twice against Actions storage. On a branch there is no release,
+      # so the artifact is the only way to get the build off the runner - kept
+      # briefly, because a branch build is looked at the day it is made or never.
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && github.ref != 'refs/heads/main'
         with:
           name: apk
           path: build/*.apk
           if-no-files-found: ignore
-          retention-days: 30
+          retention-days: 3
 
-      # A release per push to main, so there is always a link to tap on the
-      # phone rather than an artifact that needs a login to download.
+      # A release per push to main, so there is always one stable URL for the
+      # build. On a private repo a release asset needs a login just as an
+      # artifact does, so that is not what this buys. What it buys is the file
+      # the dashboard's Porter fetches with `gh release download` for the phone
+      # Update button, and a link Gideon can tap while signed in.
       - name: Publish a release
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
@@ -370,7 +393,9 @@ jobs:
         with:
           name: aab
           path: build/*.aab
-          retention-days: 90
+          # The bundle is also attached to the tag's release in the next step, so
+          # this copy only has to outlive the Play upload, not the release.
+          retention-days: 14
 
       # Attached to the tag's release, not to a rolling build number - this is
       # the file that gets uploaded to Play Console by hand.
