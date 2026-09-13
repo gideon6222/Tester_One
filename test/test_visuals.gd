@@ -2,7 +2,7 @@ extends RefCounted
 
 ## THE THREE VISUALS TIERS, ANSWERED ON THE DESK.
 ##
-## INDEX.md rule 17: every game ships low, medium and high, low is aimed at a
+## INDEX.md rule 18: every game ships low, medium and high, low is aimed at a
 ## 2021 flagship, and low never caps what the game is. This suite is what makes
 ## the rule a gate rather than a sentence:
 ##

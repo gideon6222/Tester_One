@@ -276,7 +276,7 @@ function Format-SharedReading($Reading, [int] $Therm, [string] $Phase) {
 }
 
 ## THE VISUALS READING: the game's own GPU milliseconds per frame, which is the number that
-## transfers to a slower phone (DEVICE.md in the knowledge base, INDEX.md rule 17). The game
+## transfers to a slower phone (DEVICE.md in the knowledge base, INDEX.md rule 18). The game
 ## prints `VISUALS tier=<t> gpu=<ms> cpu=<ms> fps=<n>` every ten seconds on a phone
 ## (src\game\visuals.gd, Main._report_visuals_line); the newest line in logcat is the reading.
 ## $null when the game has printed none, which is reported as unmeasured and never as zero.
@@ -331,7 +331,7 @@ function Show-Visuals {
   }
   if ($v.Tier -eq 'low') {
     $floor = $v.Gpu * $b.Ratio
-    $parts += if ($floor -le $b.Frame) { ("predicts {0:n1} ms on the floor phone, inside a 60 fps frame" -f $floor) } else { ("predicts {0:n1} ms on the floor phone, which MISSES 60 fps; low goes no lower, so the floor is unmet for this game (INDEX.md rule 17)" -f $floor) }
+    $parts += if ($floor -le $b.Frame) { ("predicts {0:n1} ms on the floor phone, inside a 60 fps frame" -f $floor) } else { ("predicts {0:n1} ms on the floor phone, which MISSES 60 fps; low goes no lower, so the floor is unmet for this game (INDEX.md rule 18)" -f $floor) }
   }
   $parts += if ($duty -le $b.Duty + 0.0001) { "no soak owed at this duty" } else { "duty over $($b.Duty * 100)%, so perf -Soak 10 is owed once for this build" }
   $judge = $parts -join '; '

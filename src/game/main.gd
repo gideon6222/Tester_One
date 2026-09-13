@@ -87,7 +87,7 @@ var frozen := false
 
 var _booted := false
 
-## The visuals tier in force (INDEX.md rule 17, `src/game/visuals.gd`). The
+## The visuals tier in force (INDEX.md rule 18, `src/game/visuals.gd`). The
 ## sun and the environment are kept so a tier change can reach the shadows and
 ## the effects, which are the two costs a scale slider cannot touch.
 var visuals_tier := Visuals.DEFAULT
