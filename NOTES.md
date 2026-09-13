@@ -140,3 +140,10 @@ for the phone over adb, `test/replays/` for recorded scenarios, and `config/quit
 which live in `GODOT.md`. **None of the new scripts has been run on this machine yet**: the first
 session to use each one should verify it and `/record-lesson` anything that needed fixing
 (the replay autoload in particular has not been booted under the smoke harness).
+
+## Owed
+
+`PHONE TEST OWED` lines are written at the end of this file by `scripts\device.ps1` when
+another game held the phone, so a skipped phone pass leaves a trace instead of disappearing.
+Add what you were going to test, rerun the phone pass later, and change the prefix to
+`PHONE TEST DONE`. `scripts\doctor.ps1` warns while one is outstanding.

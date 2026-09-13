@@ -2,8 +2,18 @@
 .SYNOPSIS
   The phone, over adb. Install, launch, read the log, screenshot, record, measure, poke.
 
+.DESCRIPTION
+  There is one phone and several sessions. Every action here claims it first through
+  C:\dev\gamedev-notes\scripts\phone.ps1, and every action renews that claim as it runs, so
+  two games cannot install over each other or read each other's logcat. When another game
+  holds it this script writes a `PHONE TEST OWED` line into NOTES.md and **exits 75** without
+  touching adb: that is not a failure to retry, it is an answer. Finish the desk pass and
+  come back to the phone. End a phone pass with `release`; a forgotten lease expires in 20
+  minutes on its own. Never call adb directly - a raw adb call is the one path the lease
+  cannot see.
+
 .EXAMPLE
-  scripts\device.ps1 install            # adb install -r -g build\<slug>.apk
+  scripts\device.ps1 install            # adb install -r -g build\<slug>.apk (and claims the phone)
   scripts\device.ps1 launch             # force-stop and start, waits for the window
   scripts\device.ps1 log                # live: every print() and error (tag "godot"). Ctrl+C to stop
   scripts\device.ps1 log -Dump          # dump what is there and return
@@ -14,6 +24,7 @@
   scripts\device.ps1 tap 540 1800 | swipe 300 1500 800 1500 200 | back | home | resume
   scripts\device.ps1 pull-replay        # user://replay.json from the phone -> test\replays\phone-<time>.json
   scripts\device.ps1 uninstall
+  scripts\device.ps1 release            # give the phone back at the end of the pass
 #>
 [CmdletBinding()]
 param(
@@ -67,6 +78,50 @@ function Resolve-Ffmpeg {
   return ""
 }
 
+## The phone is one device shared by every running session, so it is claimed before use and
+## given back after. The lease lives in the knowledge base, not here, because the games share
+## the phone, not the code. A missing knowledge base must never stop a game testing on the
+## phone, so that case warns once and runs unleased.
+$slug = Split-Path $root -Leaf
+$phoneScript = 'C:\dev\gamedev-notes\scripts\phone.ps1'
+$script:PhoneHolder = 'another game'
+function Invoke-Phone([string] $PhoneAction, [int] $Minutes = 20) {
+  if (-not (Test-Path -LiteralPath $phoneScript)) {
+    Write-Host "   (no $phoneScript, so the phone is used unleased - another session could be on it)" -ForegroundColor Yellow
+    return 0
+  }
+  # A child process's Write-Host arrives here as pipeline strings, so the output is captured
+  # and re-printed rather than passed through, which is also how the holder's name is read.
+  $out = Native { & powershell -NoProfile -ExecutionPolicy Bypass -File $phoneScript $PhoneAction -Owner $slug -Minutes $Minutes 2>&1 }
+  $code = $LASTEXITCODE
+  foreach ($l in @($out)) { Write-Host "   $l" }
+  $m = [regex]::Match(($out -join "`n"), 'held by ([^\s,]+)')
+  if ($m.Success) { $script:PhoneHolder = $m.Groups[1].Value }
+  return $code
+}
+
+## A refused phone pass that leaves no trace is a phone pass that silently never happens.
+## The line is plain text at the start of a line so scripts\doctor.ps1 (Test-PhoneDebt) can
+## see it in any game, and only one is written: a pass retried five times is one debt, not
+## five. AppendAllText, never Get-Content/Set-Content, which rewrites the whole file and
+## mangles non-ASCII bytes.
+function Write-PhoneDebt([string] $What) {
+  $notes = Join-Path $root 'NOTES.md'
+  if (-not (Test-Path -LiteralPath $notes)) {
+    Write-Host "   (no NOTES.md here, so the owed phone test is not recorded anywhere)" -ForegroundColor Yellow
+    return
+  }
+  $text = [System.IO.File]::ReadAllText($notes)
+  if ($text -match '(?m)^PHONE TEST OWED') {
+    Write-Host '   NOTES.md already records a phone test owed, so no second line was added.'
+    return
+  }
+  $line = "PHONE TEST OWED $(Get-Date -Format 'yyyy-MM-dd HH:mm'): device.ps1 $What refused, phone held by $($script:PhoneHolder). Rerun the phone pass and change this prefix to PHONE TEST DONE."
+  $lead = if ($text.EndsWith("`n")) { '' } else { "`n" }
+  [System.IO.File]::AppendAllText($notes, "$lead$line`n", (New-Object System.Text.UTF8Encoding($false)))
+  Write-Host "   wrote to NOTES.md: $line"
+}
+
 function Sheet($video, $sheet) {
   $ffmpeg = Resolve-Ffmpeg
   if ($ffmpeg) {
@@ -77,8 +132,27 @@ function Sheet($video, $sheet) {
   }
 }
 
-Require-Device
-switch ($Action.ToLower()) {
+$act = $Action.ToLower()
+
+# The device check comes FIRST and the claim second, on purpose. "No phone connected" and
+# "another game has the phone" are different reports and want different answers, and claiming
+# before the check would leave a lease on a machine with nothing plugged in.
+# `release` is the exception and skips the check: the phone being unplugged is the commonest
+# reason a pass ends, and a lease you cannot give back because the cable came out is a lease
+# the next game waits twenty minutes for.
+if ($act -ne 'release') {
+  Require-Device
+  # A live logcat blocks until Ctrl+C, so it books the phone for an hour. Everything else is
+  # seconds long and renews the default 20 minutes as it goes.
+  $minutes = if ($act -eq 'log' -and -not $Dump) { 60 } else { 20 }
+  if ((Invoke-Phone 'claim' $minutes) -eq 75) {
+    Write-PhoneDebt $act
+    exit 75
+  }
+}
+
+switch ($act) {
+  'release' { Invoke-Phone 'release' | Out-Null }
   'install' {
     $path = Join-Path $root $apk
     if (-not (Test-Path $path)) { throw "no APK at $path; export first" }
