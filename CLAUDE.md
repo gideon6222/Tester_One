@@ -64,6 +64,7 @@ scripts\device.ps1 install | launch | log | shot | record 30 | perf
 | `scripts/rects.gd` | Every `Control`'s real global rect, in the space a replay is written in |
 | `scripts/check_size.gd` | APK size guard, fails in both directions |
 | `scripts/stamp.ps1`, `scripts/export_release.bat` | Build stamp; Play AAB with the quotes intact |
+| `scripts/deliver.ps1` | Stamp, gate, export and install, in one call, for the three beats in `INDEX.md` rule 3. 19 s measured. A red gate is its only failing exit; nothing moved, no cable and a busy phone are each an exit 0, so calling it often is free. `-Show` reads `build/last-delivery.json` |
 | `.github/workflows/build.yml` | Tests, APK on every push, AAB on a `v*` tag |
 
 ## Placeholders the scaffold renames
