@@ -76,20 +76,20 @@ var _abort := false
 ## Capturing "at 24.5 seconds" means guessing which moment of the game that is,
 ## and the moments worth photographing are the short ones. A sibling game grew
 ## NINE near-identical `shot_*.gd` files, 473 lines, differing only in a setup
-## call and a filename; every one of them is an arm of the match below. When
-## this game grows a screen, add an arm here rather than a file - a state is
+## call and a filename; every one of them is an arm of `Main.dev_seek`. When
+## this game grows a screen, add an arm THERE rather than a file - a state is
 ## then a word on a command line instead of a script somebody has to find.
 ##
-## Keep each arm to the SETUP. The play loop, the shutter and the filename are
-## shared below on purpose, because the nine files drifted apart in exactly
-## those three places.
-const STATES := {
-	"": "the game, played for <seconds> seconds",
-	"start": "the very first frame, before anything has happened",
-	"hit": "the moment after an impact, while the cooldown is running",
-	"finish": "the interlude after a level is completed",
-	"level2": "a later level, which is faster and denser",
-}
+## **The table used to live here, and that was the bug.** This file knew four
+## states and `scripts/movie.ps1` knew none, so the only way to film a moment a
+## minute into the game was to film the minute. The names, the descriptions and
+## the setup arms are now `Main.dev_states()` and `Main.dev_seek()` in
+## `src/game/main.gd`, which means the screenshot tool, the filming tool and the
+## suite all ask the same object the same question and there is one writer. A
+## name ending in `.json` is an exact saved run; see that seam's header.
+##
+## The play loop, the shutter and the filename are still shared below on
+## purpose, because the nine files drifted apart in exactly those three places.
 
 
 func _initialize() -> void:
@@ -101,14 +101,6 @@ func _initialize() -> void:
 		else:
 			_tag = a if _tag == "" else _tag + "_" + a
 
-	if not STATES.has(_state):
-		printerr("unknown state '%s'. Known states:" % _state)
-		for k in STATES:
-			printerr("  %-8s %s" % ["(none)" if k == "" else k, STATES[k]])
-		_abort = true
-		quit(1)
-		return
-
 	var scene: PackedScene = load("res://src/game/main.tscn")
 	_main = scene.instantiate() as Main
 	root.add_child(_main)
@@ -117,43 +109,32 @@ func _initialize() -> void:
 	var step := 1.0 / 60.0
 	var mem := {}
 
-	match _state:
-		"start":
-			pass  # nothing at all: the frame the player sees first
-		"hit":
-			# Driven straight down the middle, which is what hits something,
-			# and stopped INSIDE the cooldown rather than after it.
-			var guard := 0
-			while _main.sim.lives == Tuning.START_LIVES and guard < 6000:
-				_main.advance(step, step)
-				guard += 1
-			if _main.sim.lives == Tuning.START_LIVES:
-				printerr("never took a hit in %.1f seconds of play" % (float(guard) * step))
-				_abort = true
-				quit(1)
-				return
-			_main.advance(Tuning.HIT_COOLDOWN * 0.4, step)
-		"finish":
-			var guard2 := 0
-			while not _main.sim.over and guard2 < 12000:
-				Policies.steer(Policies.DODGER, _main.sim, mem)
-				_main.advance(step, step)
-				guard2 += 1
-			if not _main.sim.over:
-				printerr("the level never ended - nothing to photograph")
-				_abort = true
-				quit(1)
-				return
-			_main.advance(Main.INTERLUDE_SECONDS * 0.5, step)
-		"level2":
-			_main.freeze(2)
-			for i in int(round(_seconds / step)):
-				Policies.steer(Policies.GREEDY, _main.sim, mem)
-				_main.advance(step, step)
-		_:
-			for i in int(round(_seconds / step)):
-				Policies.steer(Policies.GREEDY, _main.sim, mem)
-				_main.advance(step, step)
+	# No state at all is the one arm this file still owns: play for <seconds>,
+	# which is a shot.gd argument and not a state of the game.
+	if _state == "":
+		for i in int(round(_seconds / step)):
+			Policies.steer(Policies.GREEDY, _main.sim, mem)
+			_main.advance(step, step)
+		return
+
+	if not _main.dev_seek(_state):
+		printerr("unknown or unreachable state '%s'. Known states:" % _state)
+		printerr("  %-8s %s" % ["(none)", "the game, played for <seconds> seconds"])
+		var states: Dictionary = _main.dev_states()
+		for k in states:
+			printerr("  %-8s %s" % [k, states[k]])
+		printerr("  <path>.json  an exact saved run, loaded through SimSave.read_file")
+		_abort = true
+		quit(1)
+		return
+
+	# **Freeze again.** `dev_seek` hands back a RUNNING game, because filming a
+	# state is the common case and a film of a frozen game is a still. This is
+	# the other case: the shutter below fires five real frames later, and on a
+	# game that is running those five frames are however long the window took to
+	# open - which is what makes two screenshots taken a week apart comparable or
+	# not. `freeze()` would restart the sim; the flag is what stops the clock.
+	_main.frozen = true
 
 
 func _process(_delta: float) -> bool:

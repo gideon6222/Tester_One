@@ -352,6 +352,162 @@ func freeze(start_level: int = 1) -> void:
 	_sync()
 
 
+# --- the dev seam ---------------------------------------------------------
+
+## JUMP STRAIGHT TO THE SITUATION, instead of driving to it.
+##
+## Everything that looks at this game from outside - `scripts/shot.gd`,
+## `scripts/replay_player.gd` and through it `scripts/movie.ps1` - used to reach
+## an interesting moment the only way a player can: by playing from frame one
+## until it arrived. Measured on this template on 2026-09-13, the opening of
+## level 2 is 28.9 s of play away (26.7 s of level 1 plus the 2.2 s interlude),
+## and film costs 6.2 s of wall clock and 2.9 MB per second filmed. Five seconds
+## of level 2 therefore cost 211 s and 99 MB of which 96% was the drive-in.
+##
+## So the states live HERE, on the game, and the tools ask for one by name. The
+## three methods are the whole contract:
+##
+##   `dev_states()`     name -> one line of what it is. THE table. `shot.gd` and
+##                      `replay_player.gd` both print this list when they are
+##                      given a name nobody knows, so there is one writer.
+##   `dev_seek(name)`   put the game in that state and leave it RUNNING; false
+##                      for a name it does not know. A false must leave the
+##                      simulation as it was - a half-seeked game is the
+##                      plausible-looking wrong thing this seam exists to stop.
+##   `dev_heartbeat()`  the few sim numbers that MUST move while a run is alive.
+##                      `movie.ps1` prints them every thirty physics frames and
+##                      refuses a film whose first and last readings are equal,
+##                      so a run that got stuck says so instead of producing
+##                      twenty minutes of a frozen picture.
+##
+## **A name ending in `.json` is a saved run**, loaded through
+## `SimSave.read_file`. That pair restores every field or none, so an exact
+## situation pulled off the phone is a state like any other and a refusal is a
+## `false` rather than a half-loaded game.
+##
+## **Add an arm here, not a script.** A sibling game grew nine near-identical
+## `shot_*.gd` files, 473 lines, differing only in a setup call. Each one of
+## those is an arm below and a word on a command line.
+##
+## Keep each arm to the SETUP, and keep it honest: an arm that cannot reach the
+## state it promises returns false rather than photographing something else.
+## `test/test_dev_states.gd` plants a state that shares no field with a fresh
+## boot before every seek, so an arm that quietly does nothing goes red.
+
+## How long `level2` plays once it is there, so the track ahead is populated and
+## the picture is of a level being played rather than of its first frame. Fixed
+## rather than taken from the caller: a state is a state, and a seek whose result
+## depends on an argument is two states wearing one name.
+const DEV_LEVEL2_SECONDS := 6.0
+
+## The guards on the arms that play until something happens. Six thousand steps
+## is 100 s at 1/60, which is four times the length of a level here.
+const DEV_GUARD_STEPS := 6000
+const DEV_FINISH_GUARD_STEPS := 12000
+
+
+func dev_states() -> Dictionary:
+	return {
+		"start": "the very first frame, before anything has happened",
+		"hit": "the moment after an impact, while the cooldown is running",
+		"finish": "the interlude after a level is completed",
+		"level2": "a later level, which is faster and denser",
+	}
+
+
+func dev_seek(state: String) -> bool:
+	_ensure_booted()
+	var step := 1.0 / 60.0
+	var mem := {}
+
+	if state.ends_with(".json"):
+		# Read into a scratch sim FIRST. `SimSave.apply` already refuses in full
+		# rather than in part, but reading straight into the live one would still
+		# mean freezing and restarting the game before finding out the file is not
+		# there - which is a refusal that reset the run, and `test_dev_states.gd`
+		# caught exactly that on the first draft of this arm.
+		var probe := Sim.new()
+		if not SimSave.read_file(probe, _dev_save_path(state)):
+			return false
+		freeze()
+		if not SimSave.apply(sim, SimSave.to_dict(probe)):
+			push_error("dev_seek('%s'): the save loaded into a scratch sim and then would not apply to the live one" % state)
+			return false
+		_sync()
+		frozen = false
+		return true
+
+	match state:
+		"start":
+			freeze()
+		"hit":
+			# Driven straight down the middle, which is what hits something,
+			# and stopped INSIDE the cooldown rather than after it.
+			freeze()
+			var guard := 0
+			while sim.lives == Tuning.START_LIVES and guard < DEV_GUARD_STEPS:
+				advance(step, step)
+				guard += 1
+			if sim.lives == Tuning.START_LIVES:
+				push_error("dev_seek('hit'): never took a hit in %.1f seconds of play" % (float(guard) * step))
+				return false
+			advance(Tuning.HIT_COOLDOWN * 0.4, step)
+		"finish":
+			freeze()
+			var guard2 := 0
+			while not sim.over and guard2 < DEV_FINISH_GUARD_STEPS:
+				Policies.steer(Policies.DODGER, sim, mem)
+				advance(step, step)
+				guard2 += 1
+			if not sim.over:
+				push_error("dev_seek('finish'): the level never ended - nothing to photograph")
+				return false
+			advance(INTERLUDE_SECONDS * 0.5, step)
+		"level2":
+			freeze(2)
+			for i in int(round(DEV_LEVEL2_SECONDS / step)):
+				Policies.steer(Policies.GREEDY, sim, mem)
+				advance(step, step)
+		_:
+			return false
+
+	# **A seek hands back a RUNNING game.** Each arm freezes first, because
+	# stepping at a fixed delta is the only way the same seek lands in the same
+	# place on any machine - but leaving it frozen is how the first draft of this
+	# produced a film of level 2 in which nothing whatsoever moved for twenty
+	# seconds, measured. A tool that wants a still sets `frozen` back afterwards,
+	# which is what `scripts/shot.gd` does and why that flag is public.
+	frozen = false
+	return true
+
+
+## The few numbers that must move while a run is alive.
+##
+## Deliberately small and all-scalar: this is printed on one line thirty frames
+## apart and compared as text, so a nested structure would make "did anything
+## happen" unreadable. A game adds the numbers that prove ITS loop is running -
+## the ones whose being equal at both ends of a film means the run was stuck.
+func dev_heartbeat() -> Dictionary:
+	if sim == null:
+		return {}
+	return {
+		"t": snappedf(sim.time, 0.01),
+		"dist": snappedf(sim.distance, 0.01),
+		"score": sim.score,
+		"level": sim.level,
+	}
+
+
+## `res://` unless the caller already said where. Same rule as
+## `scripts/replay_player.gd` uses for a replay file, so a state and a replay are
+## named the same way on a command line, and a run pulled off the phone
+## (`user://save.json`) is reachable without a copy.
+func _dev_save_path(path: String) -> String:
+	if path.begins_with("res://") or path.begins_with("user://"):
+		return path
+	return "res://" + path
+
+
 # --- drawing --------------------------------------------------------------
 
 func _sync() -> void:

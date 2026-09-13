@@ -9,6 +9,9 @@ extends Node
 ##   godot --path . -- replay=test/replays/level1.json      # play it back
 ##   godot --path . -- touch                                 # emulate touch from the mouse (desk)
 ##   godot --path . -- policy=dodger                         # a bot that holds a thumb
+##   godot --path . -- state=level2                          # start IN a situation
+##   godot --path . -- state=user://save.json                # start in an exact saved run
+##   godot --path . -- beat                                  # print DEVBEAT progress lines
 ##
 ## On the phone `record=` writes to user://replay.json; pull it with scripts/device.ps1 pull-replay.
 ##
@@ -83,6 +86,54 @@ const TOUCH_FINGER := 1
 const MAX_DRAG_PIXELS := 54.0
 
 
+## **START IN THE SITUATION, rather than driving to it.**
+##
+## `state=<name>` asks the game to put itself in one of the situations it
+## publishes through `dev_states()`, on the first physics frame, before a single
+## replay event is pushed. A name ending in `.json` is an exact saved run. The
+## contract and the reason it lives on the game rather than here are in
+## `src/game/main.gd`; the discovery below matches on the METHOD, the same way
+## the bot is found, so a game may put the seam on its main scene, a rig node or
+## anywhere else it likes.
+##
+## **Which frame the seek lands on.** An autoload is `_ready` before the main
+## scene exists, so the seek cannot happen in `_ready`. It happens on the first
+## physics frame at which a node implementing `dev_seek` is in the tree -
+## measured on this template, physics frame 0 - and the line
+## `ReplayPlayer: sought state '<name>' on physics frame <n>` says which. The
+## first few RENDERED frames of a film are drawn before the physics loop has run
+## at all, so a contact sheet of a sought run still opens on a frame or two of
+## the unsought game. Read the sheet from the frame after that line, or pass
+## `--quit-after` a couple of frames longer.
+##
+## A game with no `dev_seek`, or a name it refuses, is `push_error` plus
+## `quit(1)`. That is deliberate and it is what makes `movie.ps1`'s short-run
+## guard fire: the alternative is a perfectly plausible twenty-second film of
+## the wrong situation, which is the exact failure filming exists to catch.
+var _state := ""
+var _state_done := false
+
+## **IS THIS RUN GETTING THE DATA IT WAS ASKED FOR?**
+##
+## `beat` prints `DEVBEAT f=<frame> k=v k=v ...` from the game's
+## `dev_heartbeat()` every `BEAT_FRAMES` physics frames. `scripts/movie.ps1`
+## passes it on every film and uses it twice: to kill a run that has stopped
+## producing them (`-StallSeconds`) and to refuse a film whose first and last
+## readings are identical, which is a film of a frozen game.
+##
+## It is an argument rather than always-on because this file is an autoload and
+## ships in the APK, and a released build has no business writing to logcat
+## thirty frames at a time.
+##
+## Half a second at 60 Hz. Short enough that a stall is noticed while there is
+## still budget left, long enough that a two-minute film costs a few hundred
+## lines rather than a few thousand.
+const BEAT_FRAMES := 30
+var _beat := 0
+var _beat_node: Node = null
+var _beat_said := false
+
+
 func _ready() -> void:
 	for a in OS.get_cmdline_user_args():
 		var s := String(a)
@@ -96,9 +147,15 @@ func _ready() -> void:
 			_record_path = "user://replay.json"
 		elif s.begins_with("policy="):
 			_policy = s.trim_prefix("policy=")
+		elif s.begins_with("state="):
+			_state = s.trim_prefix("state=")
+		elif s.begins_with("beat="):
+			_beat = maxi(1, int(s.trim_prefix("beat=")))
+		elif s == "beat":
+			_beat = BEAT_FRAMES
 		elif s == "touch":
 			Input.emulate_touch_from_mouse = true
-	set_physics_process(_replaying or _policy != "")
+	set_physics_process(_replaying or _policy != "" or _state != "" or _beat > 0)
 	if _record_path != "":
 		get_tree().root.tree_exiting.connect(_flush)
 
@@ -121,6 +178,13 @@ func _load(path: String) -> void:
 
 func _physics_process(_delta: float) -> void:
 	var frame := Engine.get_physics_frames()
+	# The seek comes first, and the heartbeat second, so the first reading the
+	# film is judged on is a reading of the situation that was asked for.
+	if _state != "" and not _state_done:
+		if not _seek_state(frame):
+			return
+	if _beat > 0 and frame % _beat == 0:
+		_print_beat(frame)
 	if frame < 3:
 		return
 	if _policy != "":
@@ -238,14 +302,83 @@ func _push_touch(pressed: bool, at: Vector2) -> void:
 	get_viewport().push_input(t, true)
 
 
+## Put the game in the situation, once, and refuse loudly rather than film the
+## wrong thing. Returns false while there is nothing to ask yet, and after a
+## refusal.
+func _seek_state(frame: int) -> bool:
+	var n := _find_method(get_tree().root, "dev_seek")
+	if n == null:
+		# The main scene is added to the tree AFTER the autoloads, so give it the
+		# same few frames the replay gate already waits before calling it absent.
+		if frame < 3:
+			return false
+		_state_done = true
+		push_error("ReplayPlayer: state=%s was asked for, but nothing in the scene implements dev_seek(name). See src/game/main.gd for the contract." % _state)
+		get_tree().quit(1)
+		return false
+
+	_state_done = true
+	# Annotated, not inferred: a call on an untyped Node returns Variant, and
+	# `:=` cannot infer from one - it fails the whole FILE rather than the line.
+	var sought: bool = n.dev_seek(_state)
+	if not sought:
+		push_error("ReplayPlayer: the game refused state=%s. Known states: %s. A name ending in .json is an exact saved run loaded through SimSave." % [_state, _known_states(n)])
+		get_tree().quit(1)
+		return false
+	print("ReplayPlayer: sought state '%s' on physics frame %d" % [_state, frame])
+	return true
+
+
+func _known_states(n: Node) -> String:
+	if not n.has_method("dev_states"):
+		return "the game publishes no dev_states()"
+	var states: Dictionary = n.dev_states()
+	if states.is_empty():
+		return "the game's dev_states() is empty"
+	var names := PackedStringArray()
+	for k in states:
+		names.append(str(k))
+	return ", ".join(names)
+
+
+## One line of the numbers that must move. Parsed by `scripts/movie.ps1`, which
+## throws when the first and the last are identical - so the shape of this line
+## is a contract, not a log message: `DEVBEAT f=<frame>` then `key=value` pairs
+## separated by single spaces.
+func _print_beat(frame: int) -> void:
+	if _beat_node == null:
+		_beat_node = _find_method(get_tree().root, "dev_heartbeat")
+	if _beat_node == null:
+		# Said once, and only after the scene has had its frames to appear, so a
+		# game that does have one is never accused of not having one.
+		if frame >= 3 and not _beat_said:
+			_beat_said = true
+			print("DEVBEAT none - nothing in the scene implements dev_heartbeat(), so this run can only be checked for liveness. See src/game/main.gd.")
+		return
+	if not _beat_said:
+		_beat_said = true
+		print("ReplayPlayer: heartbeat from dev_heartbeat() every %d physics frames" % _beat)
+	var h: Dictionary = _beat_node.dev_heartbeat()
+	var bits := PackedStringArray()
+	for k in h:
+		bits.append("%s=%s" % [str(k), str(h[k])])
+	print("DEVBEAT f=%d %s" % [frame, " ".join(bits)])
+
+
 ## The game is whatever implements the contract. Matching on the contract itself
 ## rather than on a node name or a class keeps this file generic: a game can put
-## the seam on its main scene, on a rig node, or anywhere else it likes.
+## the seam on its main scene, on a rig node, or anywhere else it likes. The bot,
+## the state seek and the heartbeat are three separate methods and are looked up
+## separately, so a game may put them on three different nodes.
 func _find_bot(n: Node) -> Node:
-	if n.has_method("bot_drag_pixels"):
+	return _find_method(n, "bot_drag_pixels")
+
+
+func _find_method(n: Node, method: String) -> Node:
+	if n.has_method(method):
 		return n
 	for c in n.get_children():
-		var found := _find_bot(c)
+		var found := _find_method(c, method)
 		if found != null:
 			return found
 	return null
