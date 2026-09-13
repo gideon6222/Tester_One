@@ -1,0 +1,20 @@
+{
+  "screenshots": {
+    "states": [
+      "start",
+      "hit",
+      "finish",
+      "level2"
+    ],
+    "window": "540x960",
+    "note": "States are names Main.dev_seek() knows (scripts/shot.gd lists them on a bad name). The window is the project viewport's own aspect so anchored HUD lands inside the offscreen frame; see scripts/store.ps1."
+  },
+  "feature": {
+    "source": "hit",
+    "crop": "1010:493:0:600",
+    "text": "Godot Template",
+    "font": "",
+    "fontsize": 92,
+    "x": 56
+  }
+}

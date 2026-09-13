@@ -1,0 +1,5 @@
+Up to 4000 characters, in Gideon's voice. The first two lines show before "Read more", so they carry the loop.
+
+Say what the player does, what grows, and what the big moments are. Short paragraphs. A capitalized line for each section works as a heading; Play renders no markdown.
+
+No advertisements. No purchases. No account. No internet connection. It does not collect anything about you, because there is nothing in it that could.
