@@ -87,9 +87,65 @@ var frozen := false
 
 var _booted := false
 
+## The visuals tier in force (INDEX.md rule 17, `src/game/visuals.gd`). The
+## sun and the environment are kept so a tier change can reach the shadows and
+## the effects, which are the two costs a scale slider cannot touch.
+var visuals_tier := Visuals.DEFAULT
+var _sun: DirectionalLight3D
+var _env: Environment
+var _report_visuals := false
+var _visuals_clock := 0.0
+
 
 func _ready() -> void:
 	_ensure_booted()
+	# The visuals tier needs a viewport, which is only there once the node is in
+	# the tree, so it is applied here rather than in the boot. A `visuals=<tier>`
+	# user arg beats the saved choice, for films and shots of one tier.
+	var tier := Visuals.load_choice()
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("visuals=") and Visuals.is_tier(a.trim_prefix("visuals=")):
+			tier = a.trim_prefix("visuals=")
+	apply_visuals(tier)
+	RenderingServer.viewport_set_measure_render_time(get_viewport().get_viewport_rid(), true)
+	_report_visuals = OS.has_feature("mobile") or OS.get_cmdline_user_args().has("beat")
+
+
+## The current tier, and the one call that changes it. `Visuals.apply` is the
+## renderer side; this keeps the name so the HUD, a settings screen and the
+## `VISUALS` line all read one field. Returns false and changes nothing for a
+## name that is not a tier.
+func apply_visuals(tier: String, viewport: Viewport = null) -> bool:
+	# `get_viewport()` is null until the first processed frame, which is where
+	# the smoke suite lives, so it hands the tree's root in explicitly.
+	var vp := viewport if viewport != null else get_viewport()
+	if not Visuals.apply(tier, vp, _sun, _env):
+		return false
+	visuals_tier = tier
+	return true
+
+
+## Chosen from a settings screen: apply, then remember. The order matters in the
+## one case that shows, a full disk, where the player keeps the tier they saw.
+func choose_visuals(tier: String) -> bool:
+	if not apply_visuals(tier):
+		return false
+	Visuals.save_choice(tier)
+	return true
+
+
+## The `VISUALS tier=... gpu=... cpu=... fps=...` line, every
+## `Visuals.REPORT_SECONDS`, on a phone and under `beat`. `device.ps1 perf`
+## reads it from logcat and judges the GPU number against the tier's budget.
+func _report_visuals_line(delta: float) -> void:
+	if not _report_visuals:
+		return
+	_visuals_clock += delta
+	if _visuals_clock < Visuals.REPORT_SECONDS:
+		return
+	_visuals_clock = 0.0
+	var m := Visuals.measure(get_viewport())
+	print(Visuals.report_line(visuals_tier, m.gpu, m.cpu, Engine.get_frames_per_second()))
 
 
 ## Building the world is idempotent and callable before the first frame.
@@ -127,11 +183,13 @@ func _build_world() -> void:
 	e.fog_light_color = Color(0.36, 0.62, 0.82)
 	e.fog_density = 0.012
 	env.environment = e
+	_env = e
 	add_child(env)
 
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-52, -38, 0)
 	sun.light_energy = 1.6
+	_sun = sun
 	add_child(sun)
 
 	_cam = Camera3D.new()
@@ -300,6 +358,7 @@ func _make_multimesh(box_size: Vector3, c: Color) -> MultiMeshInstance3D:
 # --- loop -----------------------------------------------------------------
 
 func _process(delta: float) -> void:
+	_report_visuals_line(delta)
 	if frozen:
 		return
 	_tick(delta)

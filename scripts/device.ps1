@@ -275,6 +275,71 @@ function Format-SharedReading($Reading, [int] $Therm, [string] $Phase) {
   "$Phase p50 $($Reading.p50) p95 $($Reading.p95) ms over $($Reading.Frames) frames, $fps fps avg, thermal $(Format-Thermal $Therm)"
 }
 
+## THE VISUALS READING: the game's own GPU milliseconds per frame, which is the number that
+## transfers to a slower phone (DEVICE.md in the knowledge base, INDEX.md rule 17). The game
+## prints `VISUALS tier=<t> gpu=<ms> cpu=<ms> fps=<n>` every ten seconds on a phone
+## (src\game\visuals.gd, Main._report_visuals_line); the newest line in logcat is the reading.
+## $null when the game has printed none, which is reported as unmeasured and never as zero.
+function Read-VisualsLine {
+  $lines = try { Native { & $adb logcat -d -s godot 2>$null } } catch { @() }
+  $m = $null
+  foreach ($l in @($lines)) {
+    if ($l -match 'VISUALS tier=(\w+) gpu=([\d.]+) cpu=([\d.]+) fps=(\d+)') {
+      $m = @{ Tier = $Matches[1]; Gpu = [double]$Matches[2]; Cpu = [double]$Matches[3]; Fps = [double]$Matches[4] }
+    }
+  }
+  return $m
+}
+
+## The budgets come from the game's own src\game\visuals.gd rather than a copy here, so the
+## suite that guards them and the reading that is judged by them read one table. Missing
+## constants make the judgement say so rather than fall back to a number nobody wrote.
+function Read-VisualsBudgets {
+  $gd = Join-Path $root 'src\game\visuals.gd'
+  if (-not (Test-Path -LiteralPath $gd)) { return $null }
+  $t = [System.IO.File]::ReadAllText($gd)
+  $out = @{}
+  if ($t -match 'FLOOR_RATIO\s*:=\s*([\d.]+)') { $out.Ratio = [double]$Matches[1] }
+  if ($t -match 'SOAK_FREE_DUTY\s*:=\s*([\d.]+)') { $out.Duty = [double]$Matches[1] }
+  if ($t -match 'FRAME_MS_60\s*:=\s*([\d.]+)') { $out.Frame = [double]$Matches[1] }
+  if ($t -match 'BUDGET_MS\s*:=\s*\{([^}]*)\}') {
+    foreach ($pair in [regex]::Matches($Matches[1], '"(\w+)"\s*:\s*([\d.]+)')) { $out[$pair.Groups[1].Value] = [double]$pair.Groups[2].Value }
+  }
+  if (-not $out.ContainsKey('Ratio') -or -not $out.ContainsKey('low')) { return $null }
+  return $out
+}
+
+## Prints and returns the visuals judgement as one line for NOTES.md and the shared log.
+function Show-Visuals {
+  $v = Read-VisualsLine
+  if ($null -eq $v) {
+    Write-Host "   visuals        no VISUALS line in logcat, so the GPU cost is unmeasured (a game built before src\game\visuals.gd prints none)" -ForegroundColor Yellow
+    return "visuals unmeasured"
+  }
+  $b = Read-VisualsBudgets
+  $duty = $v.Gpu * $v.Fps / 1000.0
+  $line = "visuals {0}  gpu {1:n2} ms  cpu {2:n2} ms  at {3:n0} fps  duty {4:n0}%" -f $v.Tier, $v.Gpu, $v.Cpu, $v.Fps, ($duty * 100)
+  Write-Host "   $line"
+  if ($null -eq $b) {
+    Write-Host "   (no budgets readable from src\game\visuals.gd, so the reading is not judged)" -ForegroundColor Yellow
+    return $line
+  }
+  $parts = @()
+  if ($b.ContainsKey($v.Tier)) {
+    $budget = $b[$v.Tier]
+    $parts += if ($v.Gpu -le $budget) { "within the $($v.Tier) budget of $budget ms" } else { "OVER the $($v.Tier) budget of $budget ms" }
+  }
+  if ($v.Tier -eq 'low') {
+    $floor = $v.Gpu * $b.Ratio
+    $parts += if ($floor -le $b.Frame) { ("predicts {0:n1} ms on the floor phone, inside a 60 fps frame" -f $floor) } else { ("predicts {0:n1} ms on the floor phone, which MISSES 60 fps; low goes no lower, so the floor is unmet for this game (INDEX.md rule 17)" -f $floor) }
+  }
+  $parts += if ($duty -le $b.Duty + 0.0001) { "no soak owed at this duty" } else { "duty over $($b.Duty * 100)%, so perf -Soak 10 is owed once for this build" }
+  $judge = $parts -join '; '
+  $color = if ($judge -match 'OVER|MISSES') { 'Yellow' } else { 'Green' }
+  Write-Host "   $judge" -ForegroundColor $color
+  return "$line; $judge"
+}
+
 function Sheet($video, $sheet) {
   $ffmpeg = Resolve-Ffmpeg
   if ($ffmpeg) {
@@ -359,14 +424,21 @@ switch ($act) {
     $firstTherm = Get-ThermalStatus
     Write-Host "   thermal        $(Format-Thermal $firstTherm)"
     Write-Host "   (0 is no throttling; 1+ means the phone is backing off)"
+    # The game's own GPU cost, judged against its tier's budget. This is the reading that
+    # says whether a ten-minute soak is owed at all, and what the floor phone would see.
+    $visuals = Show-Visuals
 
     if ($Soak -le 0) {
       if ($first.Found) {
-        Write-PhoneReading ("$(Get-Date -Format 'yyyy-MM-dd HH:mm')  spot     p50 $($first.p50) p90 $($first.p90) p95 $($first.p95) p99 $($first.p99) ms over $($first.Frames) frames, thermal $(Format-Thermal $firstTherm)")
-        Write-SharedPhoneLog (Format-SharedReading $first $firstTherm 'spot')
+        Write-PhoneReading ("$(Get-Date -Format 'yyyy-MM-dd HH:mm')  spot     p50 $($first.p50) p90 $($first.p90) p95 $($first.p95) p99 $($first.p99) ms over $($first.Frames) frames, thermal $(Format-Thermal $firstTherm); $visuals")
+        Write-SharedPhoneLog ((Format-SharedReading $first $firstTherm 'spot') + "; $visuals")
       }
       Write-Host ""
-      Write-Host "   For the throttling answer POLISH asks for, run: scripts\device.ps1 perf -Soak 10"
+      if ($visuals -match 'soak 10 is owed') {
+        Write-Host "   For the throttling answer, run: scripts\device.ps1 perf -Soak 10"
+      } else {
+        Write-Host "   No soak is owed at this duty cycle (DEVICE.md). Run perf -Soak 10 only if the reading above says so."
+      }
       break
     }
 
@@ -397,7 +469,7 @@ switch ($act) {
     # --- the record ---------------------------------------------------------
     $stampNow = Get-Date -Format 'yyyy-MM-dd HH:mm'
     if ($first.Found) {
-      Write-PhoneReading ("$stampNow  opening  p50 $($first.p50) p90 $($first.p90) p95 $($first.p95) p99 $($first.p99) ms over $($first.Frames) frames, thermal $(Format-Thermal $firstTherm)")
+      Write-PhoneReading ("$stampNow  opening  p50 $($first.p50) p90 $($first.p90) p95 $($first.p95) p99 $($first.p99) ms over $($first.Frames) frames, thermal $(Format-Thermal $firstTherm); $visuals")
     }
     if ($second.Found) {
       Write-PhoneReading ("$stampNow  +$Soak min  p50 $($second.p50) p90 $($second.p90) p95 $($second.p95) p99 $($second.p99) ms over $($second.Frames) frames, thermal $(Format-Thermal $secondTherm)")
@@ -468,5 +540,33 @@ switch ($act) {
     if (Test-Path $dest) { Write-Host "replay: $dest" } else { throw "no replay.json on the phone; launch with a `record` user arg first" }
   }
   'size' { Adb shell wm size; Adb shell wm density }
+  # The handset's own facts, for DEVICE.md in the knowledge base: size, density, the display
+  # modes and refresh rates, and the insets (cutout, status bar, gesture bar) in pixels. One
+  # call, read-only, so a new phone gets a profile in a minute rather than a session.
+  'profile' {
+    Write-Host "model:   $((Native { & $adb shell getprop ro.product.model }) -join '') ($((Native { & $adb shell getprop ro.product.device }) -join ''))"
+    Write-Host "android: $((Native { & $adb shell getprop ro.build.version.release }) -join '') (SDK $((Native { & $adb shell getprop ro.build.version.sdk }) -join '')), security patch $((Native { & $adb shell getprop ro.build.version.security_patch }) -join '')"
+    Write-Host "soc:     $((Native { & $adb shell getprop ro.soc.model }) -join '') / $((Native { & $adb shell getprop ro.hardware }) -join '')"
+    Write-Host "gpu:     $((Native { & $adb shell getprop ro.hardware.egl }) -join '')  vulkan feature level $((Native { & $adb shell getprop ro.hardware.vulkan }) -join '')"
+    Adb shell wm size; Adb shell wm density
+    Write-Host "display modes:"
+    (Native { & $adb shell dumpsys display }) | Where-Object { $_ -match 'DisplayMode\{|mActiveModeId|mDefaultModeId|refreshRate=|mRefreshRate' } | Select-Object -First 12 | ForEach-Object { Write-Host "   $($_.Trim())" }
+    Write-Host "insets and cutout (window pixels):"
+    (Native { & $adb shell dumpsys window displays }) | Where-Object { $_ -match 'DisplayCutout|cutout|statusBars|navigationBars|mandatorySystemGestures|systemGestures|displayCutout|tappableElement' } | Select-Object -First 16 | ForEach-Object { Write-Host "   $($_.Trim())" }
+    Write-Host "thermal now: $(Format-Thermal (Get-ThermalStatus))"
+    Write-Host "(record these in C:\dev\gamedev-notes\DEVICE.md when the phone is new or its settings changed)"
+  }
+  # Switch the visuals tier on the phone and relaunch, for a reading per tier. Writes the
+  # same user://visuals.json the settings screen writes, through run-as, which a debug build
+  # allows. A release build refuses run-as, and the tier is then changed on the screen.
+  'tier' {
+    $tier = if ($Rest.Count -gt 0) { "$($Rest[0])".ToLower() } else { '' }
+    if ($tier -notin @('low', 'medium', 'high')) { throw "tier low|medium|high" }
+    $json = '{"tier":"' + $tier + '"}'
+    Native { & $adb shell run-as $pkg sh -c "\`"printf '%s' '$json' > files/visuals.json\`"" }
+    if ($LASTEXITCODE -ne 0) { throw "run-as $pkg refused, which means this is not a debug build; pick the tier on the settings screen instead" }
+    Adb shell am start '-W' '-S' '-n' $component | Out-Null
+    Write-Host "visuals tier $tier written and $pkg relaunched; give it ten seconds, then perf reads the VISUALS line"
+  }
   default { throw "unknown action $Action. See the header of this script." }
 }

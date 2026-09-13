@@ -41,6 +41,8 @@ scripts\device.ps1 install | launch | log | shot | record 30 | perf
 | `src/sim/rng.gd` | A seeded stream for values that decide *when* something happens |
 | `src/sim/save.gd` | The save as a pure `Sim` <-> `Dictionary` pair. `apply` restores every field or returns false. The `user://` wrapper at the bottom is twelve lines and nothing calls it yet |
 | `src/game/main.gd` | The shell: reads `Sim`, draws it, feeds it input. Decides nothing. Anchored HUD and a thumb pad already wired. Also **the dev seam**: `dev_states`, `dev_seek`, `dev_heartbeat` |
+| `src/game/visuals.gd` | **The three visuals tiers** (INDEX.md rule 17): the low, medium, high table, the budgets in GPU ms per frame measured on the S26, the floor-phone ratio, the pure `judge` and the save pair. `apply` is the one renderer call. The numbers are `C:\dev\gamedev-notes\DEVICE.md`'s, dated; change them there first |
+| `test/test_visuals.gd` | The gate on the tiers: three exist in order, each costs no more than the next, the choice round-trips and a bad one is refused, the budget and duty arithmetic. The smoke suite applies each tier to the real viewport and reads it back |
 | `src/game/main.tscn` | One node with the script; the world is built in code |
 | `src/build_stamp.gd` | Overwritten by CI. Committed fallback says `dev` |
 | `src/changelog.gd` | `VERSION` and the player-facing history |
@@ -58,7 +60,7 @@ scripts\device.ps1 install | launch | log | shot | record 30 | perf
 | `test/test_replay_policy.gd` | The gate on `policy=`: the bot seam exists, restores the sim, and its drag lands where the policy asked |
 | `test/test_dev_states.gd` | The gate on the dev seam: every published state seeks, lands where its name promises, hands back a RUNNING game, and a refusal changes nothing |
 | `scripts/movie.ps1` | Film a deterministic run into a contact sheet. `-State` starts IN a situation; `-StallSeconds` and `-MaxMinutes` kill a run that is stuck |
-| `scripts/device.ps1` | The phone over adb |
+| `scripts/device.ps1` | The phone over adb. `perf` reads the game's `VISUALS` line and judges GPU ms against the tier's budget, `tier low|medium|high` switches a debug build, `profile` prints the handset's facts for `DEVICE.md` |
 | `scripts/check.ps1` | The local gate in the order that fails fastest |
 | `scripts/shot.gd` | Screenshot at the PHONE's aspect ratio, at a time or in a named state, into `build/shot[_state].png` |
 | `scripts/rects.gd` | Every `Control`'s real global rect, in the space a replay is written in |

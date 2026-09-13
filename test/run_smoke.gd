@@ -86,9 +86,38 @@ func _initialize() -> void:
 	_t.ok(main._hud.text.contains(str(main.sim.lives)), "the HUD lives count disagrees with the run")
 
 	_check_the_controls_are_anchored(main)
+	_check_the_visuals_tiers_reach_the_renderer(main)
 	_check_the_level_can_be_left(main)
 
 	_finish()
+
+
+## Every tier must land in the engine, not only in the table.
+##
+## `test_visuals.gd` proves the table: three tiers, ordered, a choice that
+## round-trips. What it cannot see is `Visuals.apply()`, and a key added to
+## the table with no setter behind it is a tier that quietly does nothing -
+## which the player reports as "low looks the same as high". So each tier is
+## pushed into the real viewport here and the settings are read back off it.
+func _check_the_visuals_tiers_reach_the_renderer(main) -> void:
+	_t.begin("smoke > each visuals tier reaches the viewport")
+	# `main.get_viewport()` is null here: `_initialize` runs before the first
+	# processed frame, the same reason `_ready` has not fired. The tree's root
+	# IS the viewport the game will draw into, so it is handed in explicitly.
+	var vp: Viewport = root
+	_t.ok(vp != null, "the scene has no viewport to apply a tier to")
+	for name in Visuals.ORDER:
+		var s: Dictionary = Visuals.settings(name)
+		_t.ok(main.apply_visuals(name, vp), "apply_visuals('%s') refused a real tier" % name)
+		_t.eq(main.visuals_tier, name, "the tier in force is not the one just applied")
+		_t.approx(vp.scaling_3d_scale, float(s.scale), 0.001, "%s: the 3D scale did not reach the viewport" % name)
+		_t.eq(int(vp.msaa_3d), int(s.msaa), "%s: MSAA did not reach the viewport" % name)
+		_t.eq(Engine.max_fps, int(s.fps), "%s: the frame cap did not reach the engine" % name)
+		_t.eq(main._sun.shadow_enabled, bool(s.shadows), "%s: shadows did not reach the sun" % name)
+		_t.eq(main._env.glow_enabled, bool(s.effects), "%s: effects did not reach the environment" % name)
+	_t.ok(not main.apply_visuals("ultra", vp), "a name that is not a tier was applied")
+	_t.eq(main.visuals_tier, "high", "a refused tier still changed the tier in force")
+	main.apply_visuals(Visuals.DEFAULT, vp)
 
 
 ## The controls must be ANCHORED to the viewport, never placed at a literal
