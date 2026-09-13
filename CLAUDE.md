@@ -22,6 +22,8 @@ scripts\check.ps1                 # import, pure tests, smoke, size guard: the l
 scripts\check.ps1 -Export         # plus the debug APK
 scripts\movie.ps1 -Seconds 10 -Name idle
 scripts\movie.ps1 -Seconds 60 -Name bot -UserArgs policy=dodger   # a bot that holds a THUMB
+scripts\movie.ps1 -State level2 -Seconds 5 -UserArgs policy=dodger  # START in the situation
+scripts\movie.ps1 -State user://save.json -Seconds 8               # ... or in an exact saved run
 scripts\device.ps1 install | launch | log | shot | record 30 | perf
 & $env:GODOT --path . --resolution 460x996 --script res://scripts/shot.gd -- 14.0
 & $env:GODOT --path . --resolution 460x996 --script res://scripts/shot.gd -- 45 hit   # a named STATE
@@ -38,7 +40,7 @@ scripts\device.ps1 install | launch | log | shot | record 30 | perf
 | `src/sim/util.gd` | `smooth`, `hash2`, `fmt`. The hash is load-bearing and tested |
 | `src/sim/rng.gd` | A seeded stream for values that decide *when* something happens |
 | `src/sim/save.gd` | The save as a pure `Sim` <-> `Dictionary` pair. `apply` restores every field or returns false. The `user://` wrapper at the bottom is twelve lines and nothing calls it yet |
-| `src/game/main.gd` | The shell: reads `Sim`, draws it, feeds it input. Decides nothing. Anchored HUD and a thumb pad already wired |
+| `src/game/main.gd` | The shell: reads `Sim`, draws it, feeds it input. Decides nothing. Anchored HUD and a thumb pad already wired. Also **the dev seam**: `dev_states`, `dev_seek`, `dev_heartbeat` |
 | `src/game/main.tscn` | One node with the script; the world is built in code |
 | `src/build_stamp.gd` | Overwritten by CI. Committed fallback says `dev` |
 | `src/changelog.gd` | `VERSION` and the player-facing history |
@@ -52,9 +54,10 @@ scripts\device.ps1 install | launch | log | shot | record 30 | perf
 | `test/run_probe.gd` | Balance readings. Prints; never fails |
 | `test/harness.gd` | The assertions, deliberately small, with `FLOAT_EPS` |
 | `test/replays/` | Recorded touch scenarios for `movie.ps1`. A `policy=` run needs none: it adapts |
-| `scripts/replay_player.gd` | Autoload. `-- record=<file>`, `-- replay=<file>`, `-- touch`, `-- policy=<name>` |
+| `scripts/replay_player.gd` | Autoload. `-- record=<file>`, `-- replay=<file>`, `-- touch`, `-- policy=<name>`, `-- state=<name or .json>`, `-- beat` |
 | `test/test_replay_policy.gd` | The gate on `policy=`: the bot seam exists, restores the sim, and its drag lands where the policy asked |
-| `scripts/movie.ps1` | Film a deterministic run into a contact sheet |
+| `test/test_dev_states.gd` | The gate on the dev seam: every published state seeks, lands where its name promises, hands back a RUNNING game, and a refusal changes nothing |
+| `scripts/movie.ps1` | Film a deterministic run into a contact sheet. `-State` starts IN a situation; `-StallSeconds` and `-MaxMinutes` kill a run that is stuck |
 | `scripts/device.ps1` | The phone over adb |
 | `scripts/check.ps1` | The local gate in the order that fails fastest |
 | `scripts/shot.gd` | Screenshot at the PHONE's aspect ratio, at a time or in a named state, into `build/shot[_state].png` |

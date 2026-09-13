@@ -6,7 +6,8 @@ extends RefCounted
 ## `scripts/shot.gd`, `scripts/replay_player.gd` and `scripts/movie.ps1` start a
 ## run IN the situation being troubleshot instead of driving to it. Measured on
 ## this template on 2026-09-13: filming five seconds of level 2 by playing to it
-## cost 211 s and 99 MB, and `-State level2` cost 33 s and 15 MB.
+## cost 216.0 s and 100.7 MB, and `-State level2 -Seconds 5` cost 37.3 s and
+## 14.9 MB for the same five seconds of picture.
 ##
 ## **The failure this file exists to catch is a seek that does nothing.** A
 ## `dev_seek` that returns true and leaves the game where it was passes every
@@ -140,6 +141,13 @@ func test_level2_is_a_later_level_already_under_way(t: TestHarness) -> void:
 	t.gt(main.sim.distance, 0.0,
 		"dev_seek('level2') stopped on level 2's first frame, so nothing is on the track and the picture says nothing about a denser level")
 	t.ok(not main.sim.over, "dev_seek('level2') arrived at a level that is already over")
+	# A state you cannot play out of is not the state its name promises. The
+	# first draft of this arm played greedily for six seconds on a denser level
+	# and arrived with one life left; the film of it died twelve frames in and
+	# spent the rest of its budget on a fresh level 1, which is a plausible
+	# contact sheet of the wrong game.
+	t.eq(main.sim.lives, Tuning.START_LIVES,
+		"dev_seek('level2') arrived with lives already spent, so a film that starts here is a film of the run ending")
 	main.free()
 
 

@@ -359,10 +359,11 @@ func freeze(start_level: int = 1) -> void:
 ## Everything that looks at this game from outside - `scripts/shot.gd`,
 ## `scripts/replay_player.gd` and through it `scripts/movie.ps1` - used to reach
 ## an interesting moment the only way a player can: by playing from frame one
-## until it arrived. Measured on this template on 2026-09-13, the opening of
-## level 2 is 28.9 s of play away (26.7 s of level 1 plus the 2.2 s interlude),
-## and film costs 6.2 s of wall clock and 2.9 MB per second filmed. Five seconds
-## of level 2 therefore cost 211 s and 99 MB of which 96% was the drive-in.
+## until it arrived. The opening of level 2 is 28.9 s of play away (26.7 s of
+## level 1 plus the 2.2 s interlude) and film costs 6.3 s of wall clock and
+## 3.0 MB per second, so measured on this template on 2026-09-13, five seconds
+## of level 2 cost 216.0 s and 100.7 MB by playing to it and 37.3 s and 14.9 MB
+## by seeking to it.
 ##
 ## So the states live HERE, on the game, and the tools ask for one by name. The
 ## three methods are the whole contract:
@@ -464,9 +465,15 @@ func dev_seek(state: String) -> bool:
 				return false
 			advance(INTERLUDE_SECONDS * 0.5, step)
 		"level2":
+			# DODGER, not GREEDY, and this is the difference between a state and a
+			# trap. Six seconds of greedy play on a denser level arrives with one
+			# life left: the first film taken of this state died twelve frames in,
+			# sat through the interlude and spent the rest of its budget on a
+			# fresh level 1. A state you cannot play out of is not the state its
+			# name promises. `test_dev_states.gd` asserts the lives.
 			freeze(2)
 			for i in int(round(DEV_LEVEL2_SECONDS / step)):
-				Policies.steer(Policies.GREEDY, sim, mem)
+				Policies.steer(Policies.DODGER, sim, mem)
 				advance(step, step)
 		_:
 			return false
