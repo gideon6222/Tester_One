@@ -16,6 +16,7 @@ scripts\movie.ps1 -Seconds 10 -Name idle           # film it
 scripts\movie.ps1 -Seconds 60 -Name bot -UserArgs policy=dodger   # film a BOT playing it
 scripts\movie.ps1 -State level2 -Seconds 5 -UserArgs policy=dodger  # film IN a situation
 scripts\device.ps1 install                         # onto the phone
+scripts\status.ps1 -Doing "..." -Next "..."        # this session's status line for the dashboard
 ```
 
 **Film from the situation, not from the beginning.** `Main.dev_states()` publishes the
