@@ -46,6 +46,16 @@ const TRACK_Z := -1.0
 
 var sim: Sim
 
+## What the Android back button unwinds. Empty at boot, and that is a rule rather
+## than a starting value - see `back_pressed()` below.
+var screens := ScreenStack.new()
+
+## How many times the game has written its save, counted so a test can assert
+## that a back press saved without reading the disk to find out. Incremented only
+## when the write actually succeeded, so a read-only `user://` shows up as a
+## failure here rather than as a silent loss of the player's run.
+var saves_written := 0
+
 var _cam: Camera3D
 var _road: MeshInstance3D
 var _player: MeshInstance3D
@@ -566,6 +576,71 @@ func _write(mmi: MultiMeshInstance3D, items: Array[Dictionary], y: float) -> voi
 		)
 		n += 1
 	mmi.multimesh.visible_instance_count = n
+
+
+# --- the back button ------------------------------------------------------
+
+## THE ANDROID BACK BUTTON, answered here so no session has to answer it on the
+## phone again.
+##
+## `project.godot` sets `application/config/quit_on_go_back=false`. That line
+## alone, which is how this template shipped, means the button does **nothing**:
+## the engine stops quitting and nobody handles the notification, so a player
+## with a menu open presses back and the game ignores them. GODOT.md's rule is
+## that the setting and the handler are one change, and this is the handler.
+##
+## The contract is one press, one layer:
+##
+##   - a press with something open closes exactly ONE layer and returns "popped"
+##   - a press with nothing open returns "quit", and only then does the game go
+##   - either way the run is saved FIRST, because a back press is the commonest
+##     way a phone game is left and an unsaved run is the loss the player feels
+##
+## It returns a String rather than quitting inline so the whole rule is testable
+## with no tree, no window and no phone: `test/test_back_button.gd` drives it in
+## the pure suite in milliseconds. The one thing a desk cannot answer is what
+## Android does around the press - the lifecycle, the gesture, the thermal state
+## - and that is what the phone pass is for.
+func back_pressed() -> String:
+	_ensure_booted()
+	_save()
+	if screens.is_empty():
+		return "quit"
+	screens.pop()
+	return "popped"
+
+
+## The save, in one place so `back_pressed` and any future pause path cannot
+## disagree about what "saved" means.
+func _save() -> void:
+	if SimSave.write_file(sim):
+		saves_written += 1
+	else:
+		push_error("the run could not be saved to %s - the player will lose it" % SimSave.PATH)
+
+
+## THE STACK IS EMPTY AT BOOT, and this is a rule about the template rather than
+## a detail of this file.
+##
+## A screen pushed in front of the game at startup turns every other harness in
+## this repo into a test of that screen: `test_controls.gd` drags at a menu,
+## the smoke test photographs it, and the filmed runs record it. A sibling game
+## did exactly that and its whole control suite went on passing while measuring
+## nothing. So a game built from here opens ON the game, and anything it wants
+## in front of the player is pushed by a player action, never by `_ready`.
+## `test/test_back_button.gd` asserts the empty boot for that reason.
+func _notification(what: int) -> void:
+	if what != NOTIFICATION_WM_GO_BACK_REQUEST:
+		return
+	if back_pressed() != "quit":
+		return
+	# `is_inside_tree()` rather than a null check on `get_tree()`, and the
+	# difference is not style: `get_tree()` off the tree does not simply return
+	# null, it raises "Parameter data.tree is null" - a non-fatal engine error
+	# that the harness counts and fails the test for. Measured while verifying
+	# this file's own tests by reintroducing the bug they guard.
+	if is_inside_tree():
+		get_tree().quit()
 
 
 # --- input ----------------------------------------------------------------
