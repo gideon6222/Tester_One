@@ -23,10 +23,18 @@
   scripts\device.ps1 perf -Seconds 10   # reset, play for 10 s, then report
   scripts\device.ps1 perf -Soak 10      # THE THROTTLING ANSWER: read, play 10 min, read again,
                                         # judge both against POLISH, and write them to NOTES.md
+                                        # AND to the shared log every game reads (below)
   scripts\device.ps1 tap 540 1800 | swipe 300 1500 800 1500 200 | back | home | resume
   scripts\device.ps1 pull-replay        # user://replay.json from the phone -> test\replays\phone-<time>.json
   scripts\device.ps1 uninstall
   scripts\device.ps1 release            # give the phone back at the end of the pass
+
+  Every `perf` reading also goes into the log every game shares, C:\dev\.phone-log.tsv,
+  because THERMAL CARRIES BETWEEN GAMES: the handset does not cool down when the lease
+  changes hands, and a reading taken soon after another game's soak is a warm start rather
+  than a baseline. Read it BEFORE claiming, with the read-only, lease-free action:
+
+  powershell -File C:\dev\gamedev-notes\scripts\phone.ps1 history
 #>
 [CmdletBinding()]
 param(
@@ -234,6 +242,39 @@ function Write-PhoneReading([string] $Line) {
   [System.IO.File]::AppendAllText($notes, "$lead$add$Line`n", (New-Object System.Text.UTF8Encoding($false)))
 }
 
+## The same reading again, into the log every game shares (C:\dev\.phone-log.tsv).
+##
+## NOTES.md above is this game's record and answers "how does MY game run". This answers a
+## question no single game's notes can: THERMAL CARRIES BETWEEN GAMES. The handset does not
+## cool down because the lease changed hands, so a reading taken minutes after another game's
+## ten-minute soak is a warm start rather than a baseline, and it looks exactly like a
+## regression in a game that has none. `scripts\phone.ps1 history` reads this back, which is
+## what a session does BEFORE claiming.
+##
+## Swallow-everything, for the reason phone.ps1's own guard gives: a notebook that cannot be
+## written must never change what happens to the phone. And under the existing rule at the
+## top of this file, a MISSING KNOWLEDGE BASE NEVER STOPS A PHONE PASS - it is simply quiet.
+function Write-SharedPhoneLog([string] $Detail) {
+  try {
+    $logScript = 'C:\dev\gamedev-notes\scripts\phone-log.ps1'
+    if (Test-Path -LiteralPath $logScript) {
+      & $logScript append -Owner $slug -Event 'perf' -Detail $Detail *> $null
+    }
+  } catch {
+    # Deliberately empty. See the header above.
+  }
+}
+
+## One reading, as one line for the shared log: the numbers a later session needs to judge
+## whether the handset it is about to measure was hot.
+function Format-SharedReading($Reading, [int] $Therm, [string] $Phase) {
+  # averageFPS is absent whenever SurfaceFlinger did not report it, and a hashtable returns
+  # nothing rather than failing for a key it does not have, so it is spelled out as unknown
+  # instead of leaving a blank that reads like a zero.
+  $fps = if ($Reading.ContainsKey('averageFPS')) { $Reading['averageFPS'] } else { '?' }
+  "$Phase p50 $($Reading.p50) p95 $($Reading.p95) ms over $($Reading.Frames) frames, $fps fps avg, thermal $(Format-Thermal $Therm)"
+}
+
 function Sheet($video, $sheet) {
   $ffmpeg = Resolve-Ffmpeg
   if ($ffmpeg) {
@@ -322,6 +363,7 @@ switch ($act) {
     if ($Soak -le 0) {
       if ($first.Found) {
         Write-PhoneReading ("$(Get-Date -Format 'yyyy-MM-dd HH:mm')  spot     p50 $($first.p50) p90 $($first.p90) p95 $($first.p95) p99 $($first.p99) ms over $($first.Frames) frames, thermal $(Format-Thermal $firstTherm)")
+        Write-SharedPhoneLog (Format-SharedReading $first $firstTherm 'spot')
       }
       Write-Host ""
       Write-Host "   For the throttling answer POLISH asks for, run: scripts\device.ps1 perf -Soak 10"
@@ -360,6 +402,11 @@ switch ($act) {
     if ($second.Found) {
       Write-PhoneReading ("$stampNow  +$Soak min  p50 $($second.p50) p90 $($second.p90) p95 $($second.p95) p99 $($second.p99) ms over $($second.Frames) frames, thermal $(Format-Thermal $secondTherm)")
     }
+    # Into the shared log, both ends of the soak. The SECOND reading is the one that tells the
+    # next session what state it is inheriting: a handset left at MODERATE after ten minutes
+    # of play is not a baseline for anybody for a while.
+    if ($first.Found) { Write-SharedPhoneLog (Format-SharedReading $first $firstTherm 'opening') }
+    if ($second.Found) { Write-SharedPhoneLog (Format-SharedReading $second $secondTherm "after $Soak min of play") }
 
     # --- the verdict --------------------------------------------------------
     # **No layer, no verdict.** A missing SurfaceFlinger layer means nothing was measured,

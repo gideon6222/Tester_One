@@ -135,7 +135,13 @@ requirement.
 Added with the knowledge-base rewrite (see `C:\dev\gamedev-notes\README.md`): `scripts/check.ps1`
 (the local gate in one call), `scripts/movie.ps1` plus the `ReplayPlayer` autoload
 (`scripts/replay_player.gd`) for deterministic filmed runs into contact sheets, `scripts/device.ps1`
-for the phone over adb, `test/replays/` for recorded scenarios, and `config/quit_on_go_back=false`.
+for the phone over adb, `test/replays/` for recorded scenarios, and the back button as a PAIR:
+`config/quit_on_go_back=false` stops the engine quitting by itself, `_notification` plus
+`back_pressed()` and `ScreenStack` in `src/game/main.gd` decide what the press actually does, and
+`test/test_back_button.gd` asserts the unwind (one press closes exactly one layer and saves; a
+press with nothing open quits). **The setting alone is a dead button**: without the handler the
+engine stops quitting and nothing takes its place, which is what this template shipped until
+2026-09-13. The doctor's `back button` check WARNs on a game that has one half without the other.
 `CLAUDE.md` now imports the notes' `INDEX.md` instead of repeating the toolchain and invariants,
 which live in `GODOT.md`. **None of the new scripts has been run on this machine yet**: the first
 session to use each one should verify it and `/record-lesson` anything that needed fixing
