@@ -540,6 +540,9 @@ switch ($act) {
     if (Test-Path $dest) { Write-Host "replay: $dest" } else { throw "no replay.json on the phone; launch with a `record` user arg first" }
   }
   'size' { Adb shell wm size; Adb shell wm density }
+  # An arbitrary adb shell command UNDER THE LEASE, for a question none of the actions above
+  # asks. Still never a bare adb call: the claim, the renewal and the log all happen first.
+  'shell' { Native { & $adb shell @Rest } }
   # The handset's own facts, for DEVICE.md in the knowledge base: size, density, the display
   # modes and refresh rates, and the insets (cutout, status bar, gesture bar) in pixels. One
   # call, read-only, so a new phone gets a profile in a minute rather than a session.
@@ -552,7 +555,7 @@ switch ($act) {
     Write-Host "display modes:"
     (Native { & $adb shell dumpsys display }) | Where-Object { $_ -match 'DisplayMode\{|mActiveModeId|mDefaultModeId|refreshRate=|mRefreshRate' } | Select-Object -First 12 | ForEach-Object { Write-Host "   $($_.Trim())" }
     Write-Host "insets and cutout (window pixels):"
-    (Native { & $adb shell dumpsys window displays }) | Where-Object { $_ -match 'DisplayCutout|cutout|statusBars|navigationBars|mandatorySystemGestures|systemGestures|displayCutout|tappableElement' } | Select-Object -First 16 | ForEach-Object { Write-Host "   $($_.Trim())" }
+    (Native { & $adb shell dumpsys window displays }) | Where-Object { $_ -match 'DisplayCutout|cutout|statusBars|navigationBars|mandatorySystemGestures|systemGestures|displayCutout|tappableElement' } | Select-Object -First 40 | Where-Object { $_ -notmatch "overrideConfig=|HideDisplayCutout|initCutout|cutoutPathParserInfo={CutoutPathParserInfo{displayWidth=1080 displayHeight=2340 physicalDisplayWidth=1440" } | ForEach-Object { Write-Host "   $($_.Trim())" }
     Write-Host "thermal now: $(Format-Thermal (Get-ThermalStatus))"
     Write-Host "(record these in C:\dev\gamedev-notes\DEVICE.md when the phone is new or its settings changed)"
   }
@@ -562,9 +565,19 @@ switch ($act) {
   'tier' {
     $tier = if ($Rest.Count -gt 0) { "$($Rest[0])".ToLower() } else { '' }
     if ($tier -notin @('low', 'medium', 'high')) { throw "tier low|medium|high" }
+    # Piped through stdin rather than quoted on the command line: every layer between here
+    # and the phone's sh (PowerShell, adb, the remote shell) strips a level of quoting, and
+    # the first version of this landed `{tier:high}` on the phone, which the game refused.
+    # So the file is written here, pushed to the phone's scratch dir, and copied in under the
+    # app's own uid, with no quoting anywhere on the way.
     $json = '{"tier":"' + $tier + '"}'
-    Native { & $adb shell run-as $pkg sh -c "\`"printf '%s' '$json' > files/visuals.json\`"" }
+    $local = Join-Path $outDir 'visuals.json'
+    [System.IO.File]::WriteAllText($local, $json, (New-Object System.Text.UTF8Encoding($false)))
+    Adb push $local /data/local/tmp/visuals.json | Out-Null
+    Native { & $adb shell run-as $pkg cp /data/local/tmp/visuals.json files/visuals.json }
     if ($LASTEXITCODE -ne 0) { throw "run-as $pkg refused, which means this is not a debug build; pick the tier on the settings screen instead" }
+    $back = (Native { & $adb shell run-as $pkg cat files/visuals.json }) -join ''
+    if ($back.Trim() -ne $json) { throw "the tier file on the phone reads '$back', not '$json'; the quoting was eaten somewhere on the way" }
     Adb shell am start '-W' '-S' '-n' $component | Out-Null
     Write-Host "visuals tier $tier written and $pkg relaunched; give it ten seconds, then perf reads the VISUALS line"
   }

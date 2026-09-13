@@ -153,3 +153,16 @@ session to use each one should verify it and `/record-lesson` anything that need
 another game held the phone, so a skipped phone pass leaves a trace instead of disappearing.
 Add what you were going to test, rerun the phone pass later, and change the prefix to
 `PHONE TEST DONE`. `scripts\doctor.ps1` warns while one is outstanding.
+
+## Phone readings
+
+2026-09-13 16:03  spot     p50 8 p90 8 p95 8 p99 8 ms over 2407 frames, thermal 0 (NONE); visuals high  gpu 3.71 ms  cpu 0.37 ms  at 120 fps  duty 45%; within the high budget of 4.2 ms; no soak owed at this duty
+2026-09-13 16:03  spot     p50 8 p90 8 p95 8 p99 8 ms over 2406 frames, thermal 0 (NONE); visuals high  gpu 3.72 ms  cpu 0.37 ms  at 120 fps  duty 45%; within the high budget of 4.2 ms; no soak owed at this duty
+2026-09-13 16:04  spot     p50 8 p90 8 p95 8 p99 8 ms over 2405 frames, thermal 0 (NONE); visuals high  gpu 3.76 ms  cpu 0.37 ms  at 120 fps  duty 45%; within the high budget of 4.2 ms; no soak owed at this duty
+2026-09-13 16:06  spot     p50 33 p90 33 p95 33 p99 33 ms over 600 frames, thermal 0 (NONE); visuals low  gpu 1.63 ms  cpu 0.31 ms  at 30 fps  duty 5%; within the low budget of 3 ms; predicts 7.0 ms on the floor phone, inside a 60 fps frame; no soak owed at this duty
+2026-09-13 16:07  spot     p50 16 p90 16 p95 16 p99 16 ms over 1203 frames, thermal 0 (NONE); visuals medium  gpu 3.08 ms  cpu 0.39 ms  at 60 fps  duty 18%; within the medium budget of 8.3 ms; no soak owed at this duty
+2026-09-13 16:08  spot     p50 8 p90 8 p95 8 p99 8 ms over 2406 frames, thermal 0 (NONE); visuals high  gpu 3.76 ms  cpu 0.40 ms  at 120 fps  duty 45%; within the high budget of 4.2 ms; no soak owed at this duty
+2026-09-13 16:09  spot     p50 16 p90 16 p95 16 p99 16 ms over 1204 frames, thermal 0 (NONE); visuals low  gpu 1.62 ms  cpu 0.22 ms  at 60 fps  duty 10%; within the low budget of 3 ms; predicts 7.0 ms on the floor phone, inside a 60 fps frame; no soak owed at this duty
+2026-09-13 16:20  opening  p50 8 p90 8 p95 8 p99 8 ms over 2406 frames, thermal 0 (NONE); visuals high  gpu 3.76 ms  cpu 0.38 ms  at 120 fps  duty 45%; within the high budget of 4.2 ms; no soak owed at this duty
+2026-09-13 16:20  +10 min  p50 8 p90 8 p95 8 p99 8 ms over 2404 frames, thermal 0 (NONE)
+2026-09-13 16:20  verdict  PASS: p95 8 -> 8 ms (0% over 10 min, both under 16.7 ms), thermal 0 (NONE)
