@@ -166,3 +166,10 @@ Add what you were going to test, rerun the phone pass later, and change the pref
 2026-09-13 16:20  opening  p50 8 p90 8 p95 8 p99 8 ms over 2406 frames, thermal 0 (NONE); visuals high  gpu 3.76 ms  cpu 0.38 ms  at 120 fps  duty 45%; within the high budget of 4.2 ms; no soak owed at this duty
 2026-09-13 16:20  +10 min  p50 8 p90 8 p95 8 p99 8 ms over 2404 frames, thermal 0 (NONE)
 2026-09-13 16:20  verdict  PASS: p95 8 -> 8 ms (0% over 10 min, both under 16.7 ms), thermal 0 (NONE)
+2026-09-13 16:29  spot     p50 16 p90 16 p95 16 p99 16 ms over 1201 frames, thermal 0 (NONE); visuals low  gpu 1.65 ms  cpu 0.85 ms  at 60 fps  duty 10%; within the low budget of 3 ms; predicts 7.1 ms on the floor phone, inside a 60 fps frame; no soak owed at this duty
+2026-09-13 16:30  spot     p50 16 p90 16 p95 16 p99 16 ms over 1200 frames, thermal 0 (NONE); visuals medium  gpu 4.11 ms  cpu 0.77 ms  at 60 fps  duty 25%; within the medium budget of 8.3 ms; no soak owed at this duty
+2026-09-13 16:31  spot     p50 8 p90 8 p95 8 p99 8 ms over 2404 frames, thermal 0 (NONE); visuals high  gpu 5.34 ms  cpu 0.58 ms  at 119 fps  duty 64%; OVER the high budget of 4.2 ms; duty over 50%, so perf -Soak 10 is owed once for this build
+2026-09-13 16:42  opening  p50 8 p90 8 p95 8 p99 8 ms over 2406 frames, thermal 0 (NONE); visuals high  gpu 5.36 ms  cpu 0.65 ms  at 120 fps  duty 64%; OVER the high budget of 4.2 ms; duty over 50%, so perf -Soak 10 is owed once for this build
+2026-09-13 16:42  +10 min  p50 8 p90 8 p95 8 p99 8 ms over 2400 frames, thermal 0 (NONE)
+2026-09-13 16:42  verdict  PASS: p95 8 -> 8 ms (0% over 10 min, both under 16.7 ms), thermal 0 (NONE)
+[floor phone] 2026-09-13 16:51  spot     p50 8 p90 8 p95 8 p99 8 ms over 2403 frames, thermal 0 (NONE); visuals high  gpu 5.33 ms  cpu 0.61 ms  at 119 fps  duty 63%; 5.33 ms fits a 60 fps frame on the floor phone with headroom (limit 13.4 ms); duty over 50%, so perf -Soak 10 is owed once for this build

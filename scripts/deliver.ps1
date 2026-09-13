@@ -210,6 +210,12 @@ if ($retryPhoneOnly) {
 # it" as the two different answers they are.
 # ---------------------------------------------------------------------------
 $phoneScript = 'C:\dev\gamedev-notes\scripts\phone.ps1'
+# A delivery goes to HIS phone, the main role, never the floor phone. When its serial is
+# recorded, adb is pointed at it so a second handset on the cable cannot take the build.
+if (Test-Path -LiteralPath $phoneScript) {
+  $mainSerial = (Native { & powershell -NoProfile -ExecutionPolicy Bypass -File $phoneScript serial -Phone main 2>$null }) -join ''
+  if ($mainSerial.Trim()) { $env:ANDROID_SERIAL = $mainSerial.Trim() }
+}
 if (-not (Test-Path -LiteralPath $phoneScript)) {
   Write-Host "no $phoneScript on this machine, so the phone is left alone. APK: $apk"
   Write-Record $head $stampSha $false 'no knowledge base, so no phone lease'

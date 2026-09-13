@@ -28,6 +28,7 @@
   scripts\device.ps1 pull-replay        # user://replay.json from the phone -> test\replays\phone-<time>.json
   scripts\device.ps1 uninstall
   scripts\device.ps1 release            # give the phone back at the end of the pass
+  scripts\device.ps1 perf -Phone floor  # any action, on the floor phone (the S22+) instead of his
 
   Every `perf` reading also goes into the log every game shares, C:\dev\.phone-log.tsv,
   because THERMAL CARRIES BETWEEN GAMES: the handset does not cool down when the lease
@@ -46,7 +47,13 @@ param(
   ## ONE lease covers both: the throttling question is "is the p95 after ten minutes worse
   ## than the p95 at the start", and two separate device.ps1 calls cannot answer it because
   ## the phone can change hands in between.
-  [int] $Soak = 0
+  [int] $Soak = 0,
+  ## WHICH PHONE (DEVICE.md). `main` is his Galaxy S26 Ultra, `floor` is the Galaxy S22+ the
+  ## low tier is aimed at. Each role has its own lease and its own serial, read from
+  ## C:\dev\.studio\phones.json through phone.ps1, and adb is pointed at that serial through
+  ## ANDROID_SERIAL so two handsets on one cable never get each other's install. A role with
+  ## no serial recorded means whatever single device is attached, as it always did.
+  [string] $Phone = 'main'
 )
 $ErrorActionPreference = 'Stop'
 
@@ -75,8 +82,15 @@ $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 
 function Adb { param([Parameter(ValueFromRemainingArguments)] $a) Native { & $adb @a }; if ($LASTEXITCODE -ne 0) { throw "adb $($a -join ' ') failed" } }
 function Require-Device {
-  $d = (Native { & $adb devices }) -split "`n" | Where-Object { $_ -match '	device$' }
+  $d = @((Native { & $adb devices }) -split "`n" | Where-Object { $_ -match '	device$' })
   if (-not $d) { throw "no phone connected over adb. Plug it in, unlock it, and accept the USB debugging prompt." }
+  if ($env:ANDROID_SERIAL) {
+    if (-not ($d | Where-Object { $_ -match ('^' + [regex]::Escape($env:ANDROID_SERIAL) + '\s') })) {
+      throw "the $Phone phone ($env:ANDROID_SERIAL) is not attached; adb sees: $(($d | ForEach-Object { ($_ -split '\s')[0] }) -join ', ')"
+    }
+  } elseif ($d.Count -gt 1) {
+    throw "$($d.Count) phones are attached and the $Phone role has no serial in C:\dev\.studio\phones.json, so adb cannot tell which one you mean. Record the serial there (phone.ps1 devices prints it)."
+  }
 }
 ## Same resolver as movie.ps1: winget puts ffmpeg on the USER PATH, which a shell only
 ## reads at start, so a long-running session has an installed ffmpeg it cannot see. A
@@ -100,6 +114,10 @@ function Resolve-Ffmpeg {
 $slug = Split-Path $root -Leaf
 $phoneScript = 'C:\dev\gamedev-notes\scripts\phone.ps1'
 $script:PhoneHolder = 'another game'
+if (Test-Path -LiteralPath $phoneScript) {
+  $roleSerial = (Native { & powershell -NoProfile -ExecutionPolicy Bypass -File $phoneScript serial -Phone $Phone 2>$null }) -join ''
+  if ($roleSerial.Trim()) { $env:ANDROID_SERIAL = $roleSerial.Trim() }
+}
 function Invoke-Phone([string] $PhoneAction, [int] $Minutes = 20) {
   if (-not (Test-Path -LiteralPath $phoneScript)) {
     Write-Host "   (no $phoneScript, so the phone is used unleased - another session could be on it)" -ForegroundColor Yellow
@@ -107,7 +125,7 @@ function Invoke-Phone([string] $PhoneAction, [int] $Minutes = 20) {
   }
   # A child process's Write-Host arrives here as pipeline strings, so the output is captured
   # and re-printed rather than passed through, which is also how the holder's name is read.
-  $out = Native { & powershell -NoProfile -ExecutionPolicy Bypass -File $phoneScript $PhoneAction -Owner $slug -Minutes $Minutes 2>&1 }
+  $out = Native { & powershell -NoProfile -ExecutionPolicy Bypass -File $phoneScript $PhoneAction -Owner $slug -Minutes $Minutes -Phone $Phone 2>&1 }
   $code = $LASTEXITCODE
   foreach ($l in @($out)) { Write-Host "   $l" }
   $m = [regex]::Match(($out -join "`n"), 'held by ([^\s,]+)')
@@ -230,6 +248,7 @@ function Format-Thermal([int] $Status) {
 ## paragraph. The cost is that `## Phone readings` has to stay the LAST heading in the file,
 ## which is where setup\game-stubs\godot-NOTES.md puts it.
 function Write-PhoneReading([string] $Line) {
+  if ($Phone -ne 'main') { $Line = "[$Phone phone] $Line" }
   $notes = Join-Path $root 'NOTES.md'
   if (-not (Test-Path -LiteralPath $notes)) {
     Write-Host "   (no NOTES.md here, so this reading is recorded nowhere and the next session will take it again)" -ForegroundColor Yellow
@@ -258,6 +277,7 @@ function Write-SharedPhoneLog([string] $Detail) {
   try {
     $logScript = 'C:\dev\gamedev-notes\scripts\phone-log.ps1'
     if (Test-Path -LiteralPath $logScript) {
+      if ($Phone -ne 'main') { $Detail = "[$Phone phone] $Detail" }
       & $logScript append -Owner $slug -Event 'perf' -Detail $Detail *> $null
     }
   } catch {
@@ -325,6 +345,17 @@ function Show-Visuals {
     return $line
   }
   $parts = @()
+  if ($Phone -eq 'floor') {
+    # ON the floor phone there is nothing to predict: the question is whether this tier fits
+    # a 60 fps frame with 20% headroom, and low is the tier that must.
+    $limit = $b.Frame * 0.8
+    $parts += if ($v.Gpu -le $limit) { ("{0:n2} ms fits a 60 fps frame on the floor phone with headroom (limit {1:n1} ms)" -f $v.Gpu, $limit) } elseif ($v.Tier -eq 'low') { ("{0:n2} ms on low MISSES the floor phone's frame (limit {1:n1} ms); low goes no lower, so the floor is unmet for this game (INDEX.md rule 18)" -f $v.Gpu, $limit) } else { ("{0:n2} ms is over the floor phone's frame on {1}, which is expected; low is the tier that must fit" -f $v.Gpu, $v.Tier) }
+    $parts += if ($duty -le $b.Duty + 0.0001) { "no soak owed at this duty" } else { "duty over $($b.Duty * 100)%, so perf -Soak 10 is owed once for this build" }
+    $judge = $parts -join '; '
+    $color = if ($judge -match 'MISSES') { 'Yellow' } else { 'Green' }
+    Write-Host "   $judge" -ForegroundColor $color
+    return "$line; $judge"
+  }
   if ($b.ContainsKey($v.Tier)) {
     $budget = $b[$v.Tier]
     $parts += if ($v.Gpu -le $budget) { "within the $($v.Tier) budget of $budget ms" } else { "OVER the $($v.Tier) budget of $budget ms" }
@@ -574,6 +605,8 @@ switch ($act) {
     $local = Join-Path $outDir 'visuals.json'
     [System.IO.File]::WriteAllText($local, $json, (New-Object System.Text.UTF8Encoding($false)))
     Adb push $local /data/local/tmp/visuals.json | Out-Null
+    # `files/` is created by the app on its first run, so on a fresh install it is not there yet.
+    Native { & $adb shell run-as $pkg mkdir -p files }
     Native { & $adb shell run-as $pkg cp /data/local/tmp/visuals.json files/visuals.json }
     if ($LASTEXITCODE -ne 0) { throw "run-as $pkg refused, which means this is not a debug build; pick the tier on the settings screen instead" }
     $back = (Native { & $adb shell run-as $pkg cat files/visuals.json }) -join ''
