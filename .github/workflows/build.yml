@@ -29,6 +29,21 @@ permissions:
 
 env:
   GODOT_VERSION: 4.7.2
+  # **A push runs the tests. Only a dispatch or a version tag exports an APK.**
+  #
+  # The local gate (scripts\check.ps1) already imports, tests, exports and measures
+  # before every commit, and deliver.ps1 puts that same local build on the phone.
+  # What a push to main buys is the suite on a clean machine, which is the cheap
+  # half of this job: about a minute. The export half (templates, SDK, keystore,
+  # export, size guard, release) is the expensive half and its product, the APK on
+  # a release, is only ever fetched by the dashboard's Push and update button,
+  # which now asks for it explicitly with `gh workflow run`. Measured 2026-09-14:
+  # 358 runs and 1,534 of the month's 2,000 free minutes by the 14th, 113 of those
+  # runs on one game, almost every one a push whose APK nobody downloaded.
+  #
+  # So: EXPORT is true for a manual dispatch and for a v* tag (the ship), and false
+  # for an ordinary push. Every step below the smoke test is gated on it.
+  EXPORT: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
   # ONE job, not two. These ran as `test` then `android: needs: test`, which is
@@ -80,6 +95,7 @@ jobs:
         run: godot --headless --script res://test/run_smoke.gd
 
       - name: Install the export templates
+        if: env.EXPORT == 'true'
         run: |
           mkdir -p ~/.local/share/godot/export_templates
           mv /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable \
@@ -93,6 +109,7 @@ jobs:
       # image - the whole job failed with "exit code 127" and nothing else,
       # which says nothing at all about what was wrong.
       - name: Locate or install the Android SDK
+        if: env.EXPORT == 'true'
         run: |
           set -e
           SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
@@ -130,6 +147,7 @@ jobs:
       # no secret set, a throwaway debug key is generated - fine for an APK you
       # sideload, never for anything going to Play.
       - name: Write the debug keystore
+        if: env.EXPORT == 'true'
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
         run: |
@@ -151,6 +169,7 @@ jobs:
       # environment variables. Setting ANDROID_HOME alone does nothing, and the
       # error message names "Editor Settings" without saying which file.
       - name: Point Godot at the SDK and the keystore
+        if: env.EXPORT == 'true'
         run: |
           set -e
           mkdir -p ~/.config/godot
@@ -170,6 +189,7 @@ jobs:
       # The stamp is the only way to tell on a phone whether the build you are
       # holding is the build you just made.
       - name: Stamp the build
+        if: env.EXPORT == 'true'
         run: |
           set -e
           SHA=$(echo "${GITHUB_SHA}" | cut -c1-7)
@@ -182,6 +202,7 @@ jobs:
           grep 'const ' src/build_stamp.gd
 
       - name: Export the APK
+        if: env.EXPORT == 'true'
         run: |
           set -e
           godot --headless --import
@@ -192,6 +213,7 @@ jobs:
       # Fails in both directions. A build that shrinks for no reason has lost
       # something - see the note at the top of the script.
       - name: Size guard
+        if: env.EXPORT == 'true'
         run: godot --headless --script res://scripts/check_size.gd
 
       # Branches only. On main the very next step publishes a release holding the
@@ -200,24 +222,26 @@ jobs:
       # so the artifact is the only way to get the build off the runner - kept
       # briefly, because a branch build is looked at the day it is made or never.
       - uses: actions/upload-artifact@v4
-        if: always() && github.ref != 'refs/heads/main'
+        if: always() && env.EXPORT == 'true' && github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/')
         with:
           name: apk
           path: build/*.apk
           if-no-files-found: ignore
           retention-days: 3
 
-      # A release per push to main, so there is always one stable URL for the
+      # A release per EXPORT of main, so there is always one stable URL for the
       # build. On a private repo a release asset needs a login just as an
       # artifact does, so that is not what this buys. What it buys is the file
       # the dashboard's Porter fetches with `gh release download` for the phone
-      # Update button, and a link Gideon can tap while signed in.
+      # Update button, and a link Gideon can tap while signed in. A dispatch on
+      # main publishes build-N; a v* tag attaches the APK to that tag's release,
+      # beside the Play bundle the next job adds.
       - name: Publish a release
-        if: github.ref == 'refs/heads/main'
+        if: env.EXPORT == 'true' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-${{ github.run_number }}
-          name: Build ${{ github.run_number }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('build-{0}', github.run_number) }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('Build {0}', github.run_number) }}
           files: build/*.apk
           generate_release_notes: true
 
