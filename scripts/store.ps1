@@ -96,6 +96,58 @@ try {
     Write-Host ("screenshot {0}  {1}" -f $n, (Split-Path $shot -Leaf))
   }
 
+  # Did we photograph the GAME, or an empty viewport? The size check below cannot tell:
+  # a 1080x1920 frame of nothing is exactly as legal as a 1080x1920 frame of the game, so
+  # without this the script writes four blank screenshots and reports every one of them
+  # "ok" (rule 11 - a construct that cannot fail is untested). Measured on the template's
+  # own listing: a real screenshot has 168-227 distinct colors among 4096 sampled points,
+  # and a frame of the clear color has 1. The floor is 8, well under the darkest real shot
+  # and well over a flat one.
+  #
+  # The identical check is the sharper of the two. It catches the reason a game gets blanks
+  # at all: this script drives scripts\shot.gd with a STATE NAME, which only the template's
+  # shot.gd understands (it calls Main.dev_seek). A game still carrying the older
+  # `-- <seconds> <tag>` shot.gd ignores the name, plays the same opening every time, and
+  # returns the same frame under four different filenames.
+  Add-Type -AssemblyName System.Drawing
+  function Measure-Shot([string] $Path) {
+    $bmp = [System.Drawing.Bitmap]::FromFile($Path)
+    try {
+      $seen = New-Object 'System.Collections.Generic.HashSet[int]'
+      $acc = New-Object 'System.Text.StringBuilder'
+      $sx = [math]::Max(1, [int]($bmp.Width / 64)); $sy = [math]::Max(1, [int]($bmp.Height / 64))
+      for ($y = 0; $y -lt $bmp.Height; $y += $sy) {
+        for ($x = 0; $x -lt $bmp.Width; $x += $sx) {
+          $argb = $bmp.GetPixel($x, $y).ToArgb()
+          [void]$seen.Add($argb)
+          [void]$acc.Append($argb.ToString('x8'))
+        }
+      }
+      return @{ colors = $seen.Count; digest = $acc.ToString() }
+    } finally { $bmp.Dispose() }
+  }
+
+  $blank = @(); $digests = @{}; $dupes = @()
+  foreach ($state in $States) {
+    $m = Measure-Shot $byState[$state]
+    if ($m.colors -lt 8) { $blank += "$state ($($m.colors) distinct color(s))" }
+    if ($digests.ContainsKey($m.digest)) { $dupes += "$state is pixel-for-pixel $($digests[$m.digest])" }
+    else { $digests[$m.digest] = $state }
+  }
+  if ($blank -or $dupes) {
+    $why = @()
+    if ($blank) { $why += "blank: $($blank -join ', ')" }
+    if ($dupes) { $why += "identical: $($dupes -join '; ')" }
+    $hasSeek = (Test-Path (Join-Path $root 'scripts\shot.gd')) -and
+               ((Get-Content (Join-Path $root 'scripts\shot.gd') -Raw) -match 'dev_seek')
+    $fix = if ($hasSeek) {
+      "shot.gd does call dev_seek, so check that Main.dev_seek('<state>') really reaches each state in store\store.json and returns true."
+    } else {
+      "scripts\shot.gd here is the older '-- <seconds> <tag>' version, which ignores the state name this script passes. Copy scripts\shot.gd from C:\dev\godot-template and add the dev seam (dev_seek/dev_states) to src\game\main.gd, then run this again."
+    }
+    throw "the screenshots are not of the game ($($why -join ' | ')). $fix"
+  }
+
   # The feature graphic: a band cut from one screenshot, scaled to 1024x500, with the
   # wordmark drawn on the empty side. store.json says which state, where to cut, and which
   # font; a game with a real wordmark PNG can overlay that instead by editing this block.
