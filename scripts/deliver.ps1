@@ -234,6 +234,23 @@ if ($devicesText -notmatch 'phone connected') {
   exit 0
 }
 
+# **"A phone is connected" is not "THIS phone is connected."**
+#
+# `devices` correctly names EVERY attached role, so with only the floor phone on the cable
+# that string still matches - and the install below is addressed to main's serial, which is
+# not there. device.ps1 then throws and the run ends `not delivered: install failed (exit 1)`,
+# which is the code this script reserves for a RED GATE. A beat whose whole contract is "free
+# to call, exits 0 when the phone is unplugged" reported what looks exactly like a broken
+# build. Measured on gravewell 2026-09-14 with the S22+ alone on the cable.
+#
+# A different role attached is the NO-PHONE answer: name the APK and let the next beat deliver.
+if ($mainSerial -and $mainSerial.Trim() -and $devicesText -notmatch [regex]::Escape($mainSerial.Trim())) {
+  $why = 'the main phone is not on the cable, though another role is'
+  Write-Host "$why, so the build waits on disk. APK: $apk"
+  Write-Record $head $stampSha $false $why
+  exit 0
+}
+
 # ---------------------------------------------------------------------------
 # Claim it HERE, rather than letting scripts\device.ps1 refuse.
 #
