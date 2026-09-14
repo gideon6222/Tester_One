@@ -79,7 +79,16 @@ param(
   [int] $Every = 20,        # tile every Nth frame
   [int] $Cols = 6,
   [string] $Name,
-  [string] $Resolution = '460x996',
+  # **540x960, not the phone's 460x996.** Movie Maker writes the PROJECT viewport
+  # buffer (1080x1920) whatever the window is, and the stretch transform is
+  # computed for the WINDOW - so a window at the phone's aspect puts every
+  # edge-anchored Control outside the captured frame. Measured on candle-gift and
+  # on gravewell: films of both came back with no HUD at the top or bottom, so
+  # every HUD judgement this studio made from a contact sheet was made from a
+  # picture with the HUD cut off. store.ps1 already screenshots at 540x960 for
+  # exactly this reason and says so in its header; this default had the same
+  # fault with a different number. The guard below refuses a mismatch outright.
+  [string] $Resolution = '540x960',
   [switch] $Png,            # lossless PNG per frame + frame.wav, the old slow path
   [int] $StallSeconds = 45,      # kill after this long with no new heartbeat; 0 disables
   [double] $MaxMinutes = 15,     # kill after this much wall clock; 0 disables
@@ -233,6 +242,34 @@ try {
   if (Test-Path $out) { Remove-Item $out -Recurse -Force }
   New-Item -ItemType Directory -Path $out | Out-Null
   $frames = [int]($Seconds * $Fps)
+
+  # ---------------------------------------------------------------------------
+  # **The window's aspect must match the buffer's, or the film loses its edges.**
+  #
+  # This is the frame check, done at the cause rather than on the pixels: a film
+  # is only worth judging a HUD from when the two aspects agree, and comparing
+  # them is exact, instant and game-agnostic. Inspecting a rendered frame for a
+  # missing control needs to know which control, which is the game's business.
+  # ---------------------------------------------------------------------------
+  $vw = 1080.0; $vh = 1920.0
+  $pg = Join-Path $root 'project.godot'
+  if (Test-Path $pg) {
+    $pgText = Get-Content $pg -Raw -Encoding UTF8
+    if ($pgText -match 'window/size/viewport_width\s*=\s*(\d+)')  { $vw = [double]$Matches[1] }
+    if ($pgText -match 'window/size/viewport_height\s*=\s*(\d+)') { $vh = [double]$Matches[1] }
+  }
+  if ($Resolution -match '^(\d+)x(\d+)$') {
+    $rw = [double]$Matches[1]; $rh = [double]$Matches[2]
+    $want = $vw / $vh
+    $have = $rw / $rh
+    if ([Math]::Abs($want - $have) -gt 0.01) {
+      $goodH = [int][Math]::Round($rw * $vh / $vw)
+      throw ("-Resolution $Resolution is $([Math]::Round($have,3)) to 1 and the project's buffer is " +
+             "$([int]$vw)x$([int]$vh), $([Math]::Round($want,3)) to 1. Movie Maker captures the BUFFER, " +
+             "and the stretch transform is computed for the WINDOW, so every edge-anchored control " +
+             "would land outside the frame and the film would show no HUD. Use ${rw}x${goodH}.")
+    }
+  }
 
   # One MJPEG file by default; a PNG per frame plus frame.wav under -Png.
   $movieOut = if ($Png) { "build/movie/$Name/frame.png" } else { "build/movie/$Name/run.avi" }
