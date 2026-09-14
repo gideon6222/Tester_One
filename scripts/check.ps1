@@ -31,6 +31,17 @@ try {
   New-Item -ItemType Directory -Force -Path build | Out-Null
 
   function Run($label, $log, [string[]] $a, [switch] $AllowFail) {
+    # **The log path is per PROCESS, because two gates can share a repo.**
+    #
+    # Both write `build\check-<step>.log`. When a second session runs the gate
+    # here, the loser cannot open the file: the step dies with an Out-File
+    # IOException and leaves a TRUNCATED log behind - the banner and a suite
+    # list and nothing else. That reads exactly like a parse error or a killed
+    # process, and it cost a whole session of chasing a phantom flaky suite on
+    # gravewell before `deliver.ps1` printed the IOException that named it
+    # (2026-09-14). The suites were green every single time.
+    $log = Join-Path (Split-Path $log -Parent) ("{0}.{1}{2}" -f `
+      [IO.Path]::GetFileNameWithoutExtension($log), $PID, [IO.Path]::GetExtension($log))
     $t = [Diagnostics.Stopwatch]::StartNew()
     # `$ErrorActionPreference = 'Stop'` turns a native command's STDERR into a
     # terminating error BEFORE the exit-code check below it ever runs, so
