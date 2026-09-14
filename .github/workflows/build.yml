@@ -11,6 +11,10 @@ on:
       - '**/*.md'
       - 'playtests/**'
       - 'NOTES.md'
+      - 'docs/**'      # the Pages privacy page, served from main, never built
+      - 'store/**'     # Play listing copy and screenshots
+      - '.gitignore'
+      - 'LICENSE'
   pull_request:
   workflow_dispatch:
 
@@ -27,17 +31,37 @@ env:
   GODOT_VERSION: 4.7.2
 
 jobs:
-  test:
-    name: Headless tests
+  # ONE job, not two. These ran as `test` then `android: needs: test`, which is
+  # sequential anyway, so the split bought nothing and cost a second container pull
+  # (54 s, measured) plus a second per-job round-up. GitHub bills each job rounded UP
+  # to the minute, so two jobs of 3.6 and 1.7 minutes cost 4 + 2 = 6 where one job of
+  # 5.3 costs 6 and one job of 4.4 (without the second pull) costs 5. Measured on
+  # stillwater 2026-09-13: about 6 billed minutes a push before this, about 3 after
+  # this and the import cache below.
+  #
+  # Nothing is lost by merging: a failing test still stops the APK, because the steps
+  # run in order and a failed step fails the job.
+  android:
+    name: Test and build the APK
     runs-on: ubuntu-latest
-    # The engine version is pinned to the same one the game is developed
-    # against. Lighting, physics defaults and export template behavior all
-    # move between minor releases; a floating version means CI is testing a
-    # different game from the one on the desk.
     container:
       image: barichello/godot-ci:4.7.2
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # the stamp wants a real sha
+
+      # Godot's import cache, which is derived entirely from the assets and the engine
+      # version, so it is safe to reuse and Godot re-imports anything whose source
+      # changed. 32 s a run, measured. The key carries the engine version because an
+      # import written by one Godot is not readable by another.
+      - name: Cache the Godot import
+        uses: actions/cache@v4
+        with:
+          path: .godot
+          key: godot-import-4.7.2-${{ hashFiles('project.godot', '**/*.import', 'assets/**', 'addons/**') }}
+          restore-keys: |
+            godot-import-4.7.2-
 
       # Godot writes its import cache on first open. Doing it as its own step
       # means a failure here reads as "the project does not import" rather than
@@ -54,17 +78,6 @@ jobs:
       # stopped being flushed.
       - name: Smoke test
         run: godot --headless --script res://test/run_smoke.gd
-
-  android:
-    name: Build the APK
-    needs: test
-    runs-on: ubuntu-latest
-    container:
-      image: barichello/godot-ci:4.7.2
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0   # the stamp wants a real sha
 
       - name: Install the export templates
         run: |
@@ -223,7 +236,7 @@ jobs:
   #   - signed with the UPLOAD key from a secret, not a per-run throwaway
   play:
     name: Build the Play bundle
-    needs: test
+    needs: android
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     container:
