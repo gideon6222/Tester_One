@@ -78,37 +78,10 @@ try {
   if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
   New-Item -ItemType Directory -Path $tmp | Out-Null
 
-  $n = 0
-  $byState = @{}
-  foreach ($state in $States) {
-    $n++
-    $stem = Join-Path $tmp "$state.png"
-    # Movie Maker writes the project-size frame the window cannot show. See the header.
-    Native { & $godot --path . --resolution $window --write-movie $stem --fixed-fps 60 `
-      --script res://scripts/shot.gd -- $state store 2>&1 | Out-Null }
-    $frame = Get-ChildItem $tmp -Filter "$state*.png" | Sort-Object Name | Select-Object -Last 1
-    if (-not $frame) { throw "no frame rendered for state '$state' (scripts\shot.gd lists the states it knows)" }
-    $shot = Join-Path $shots ("{0}-{1}.png" -f $n, $state)
-    # Strip the alpha channel: Play takes 24-bit PNG or JPEG for screenshots.
-    Native { & $ffmpeg -y -v error -i $frame.FullName -pix_fmt rgb24 $shot }
-    $byState[$state] = $shot
-    Get-ChildItem $tmp -Filter "$state*.png" | Remove-Item -Force
-    Write-Host ("screenshot {0}  {1}" -f $n, (Split-Path $shot -Leaf))
-  }
-
-  # Did we photograph the GAME, or an empty viewport? The size check below cannot tell:
-  # a 1080x1920 frame of nothing is exactly as legal as a 1080x1920 frame of the game, so
-  # without this the script writes four blank screenshots and reports every one of them
-  # "ok" (rule 11 - a construct that cannot fail is untested). Measured on the template's
-  # own listing: a real screenshot has 168-227 distinct colors among 4096 sampled points,
-  # and a frame of the clear color has 1. The floor is 8, well under the darkest real shot
-  # and well over a flat one.
-  #
-  # The identical check is the sharper of the two. It catches the reason a game gets blanks
-  # at all: this script drives scripts\shot.gd with a STATE NAME, which only the template's
-  # shot.gd understands (it calls Main.dev_seek). A game still carrying the older
-  # `-- <seconds> <tag>` shot.gd ignores the name, plays the same opening every time, and
-  # returns the same frame under four different filenames.
+  # Sample 4096 points of an image and report how many distinct colors are among them, plus
+  # a digest of the lot. Both the frame picker below and the check after the loop are built
+  # on this one measurement. Measured on the template's own listing, a real screenshot has
+  # 168-227 distinct colors here and a frame of the clear color has 1.
   Add-Type -AssemblyName System.Drawing
   function Measure-Shot([string] $Path) {
     $bmp = [System.Drawing.Bitmap]::FromFile($Path)
@@ -127,6 +100,48 @@ try {
     } finally { $bmp.Dispose() }
   }
 
+  $n = 0
+  $byState = @{}
+  foreach ($state in $States) {
+    $n++
+    $stem = Join-Path $tmp "$state.png"
+    # Movie Maker writes the project-size frame the window cannot show. See the header.
+    Native { & $godot --path . --resolution $window --write-movie $stem --fixed-fps 60 `
+      --script res://scripts/shot.gd -- $state store 2>&1 | Out-Null }
+    # **The LAST frame is usually blank, and taking it was a bug.** Movie Maker records
+    # every frame the engine renders, including the ones during shutdown. A shot.gd that
+    # frees the scene before `quit` - which gravewell's does, and should, because leaving it
+    # alive ends the run with "resources still in use at exit" - hands Movie Maker one last
+    # frame of an empty root. Measured on gravewell: frames 0 to 3 were about 1.1 MB each
+    # and frame 4 was 10 KB of the clear color. So walk back from the end and take the last
+    # frame that actually has a picture in it, which makes this independent of whether a
+    # given game's shot.gd frees or not.
+    $frames = @(Get-ChildItem $tmp -Filter "$state*.png" | Sort-Object Name)
+    if (-not $frames) { throw "no frame rendered for state '$state' (scripts\shot.gd lists the states it knows)" }
+    $frame = $null
+    for ($i = $frames.Count - 1; $i -ge 0; $i--) {
+      if ((Measure-Shot $frames[$i].FullName).colors -ge 8) { $frame = $frames[$i]; break }
+    }
+    # Nothing in the whole recording had a picture in it. Keep the last frame anyway and let
+    # the check after the loop say so properly, with the diagnosis attached.
+    if (-not $frame) { $frame = $frames[-1] }
+    $shot = Join-Path $shots ("{0}-{1}.png" -f $n, $state)
+    # Strip the alpha channel: Play takes 24-bit PNG or JPEG for screenshots.
+    Native { & $ffmpeg -y -v error -i $frame.FullName -pix_fmt rgb24 $shot }
+    $byState[$state] = $shot
+    Get-ChildItem $tmp -Filter "$state*.png" | Remove-Item -Force
+    Write-Host ("screenshot {0}  {1}" -f $n, (Split-Path $shot -Leaf))
+  }
+
+  # Did we photograph the GAME, or an empty viewport? The size check below cannot tell:
+  # a 1080x1920 frame of nothing is exactly as legal as a 1080x1920 frame of the game, so
+  # without this the script writes four blank screenshots and reports every one of them
+  # "ok" (rule 11 - a construct that cannot fail is untested). The floor is 8 distinct
+  # colors, well under the darkest real shot and well over a flat one.
+  #
+  # The identical check is the sharper of the two. It catches a game whose scripts\shot.gd
+  # ignores the STATE NAME this script passes - the older `-- <seconds> <tag>` parser, which
+  # replays the same opening for every state and so returns one frame under four names.
   $blank = @(); $digests = @{}; $dupes = @()
   foreach ($state in $States) {
     $m = Measure-Shot $byState[$state]
