@@ -238,7 +238,7 @@ jobs:
       # beside the Play bundle the next job adds.
       - name: Publish a release
         if: env.EXPORT == 'true' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('build-{0}', github.run_number) }}
           name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('Build {0}', github.run_number) }}
@@ -467,7 +467,7 @@ jobs:
       # Attached to the tag's release, not to a rolling build number - this is
       # the file that gets uploaded to Play Console by hand.
       - name: Attach the bundle to the release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: build/*.aab
           generate_release_notes: true
