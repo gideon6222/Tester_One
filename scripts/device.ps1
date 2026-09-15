@@ -35,7 +35,14 @@
   changes hands, and a reading taken soon after another game's soak is a warm start rather
   than a baseline. Read it BEFORE claiming, with the read-only, lease-free action:
 
-  powershell -File C:\dev\gamedev-notes\scripts\phone.ps1 history
+  powershell -File C:\dev\gamedev-notes\scripts\phone.ps1 history   # what it has been asked
+  powershell -File C:\dev\gamedev-notes\scripts\phone.ps1 wants     # whose turn it is
+  powershell -File C:\dev\gamedev-notes\scripts\phone.ps1 thermal   # how warm it already is
+
+  And when this script exits 75 because another game holds the handset, say what you came for
+  so the next session can see the queue rather than wait for Gideon to carry the message:
+
+  powershell -File C:\dev\gamedev-notes\scripts\phone.ps1 want -Owner <slug> -Note '<the ask>'
 #>
 [CmdletBinding()]
 param(
@@ -289,6 +296,36 @@ function Write-SharedPhoneLog([string] $Detail) {
   }
 }
 
+## WHAT THE SHARED LOG ALREADY SAYS ABOUT THIS HANDSET, as a note to hang on this session's
+## own reading. Empty string when the phone is cold, unknown, or the question cannot be asked.
+##
+## Thermal carries between games and nothing in THIS repo can see it: the handset does not cool
+## down because the lease changed hands, so an opening reading taken minutes after another
+## game's ten-minute soak is a warm start, and it looks exactly like a regression in a game that
+## has none. `phone.ps1 thermal` reads the newest perf line in C:\dev\.phone-log.tsv and answers
+## in one word. It is read-only and lease-free, so this costs nothing and changes nothing.
+##
+## THE SAME SWALLOW-EVERYTHING GUARD AS Write-SharedPhoneLog, and for the same reason: this is
+## a label on a reading, never permission to take one. A missing knowledge base, a phone.ps1
+## without the action, a child that throws - all answer '' and the reading proceeds exactly as
+## it did before. $LASTEXITCODE is saved and restored because the caller's next check is about
+## adb, never about this.
+function Get-WarmStartNote {
+  $keep = $LASTEXITCODE
+  $note = ''
+  try {
+    if (Test-Path -LiteralPath $phoneScript) {
+      $out = (Native { & powershell -NoProfile -ExecutionPolicy Bypass -File $phoneScript thermal -Phone $Phone 2>&1 }) -join "`n"
+      $m = [regex]::Match($out, 'phone thermal: warm - (.+)')
+      if ($m.Success) { $note = "WARM START: $($m.Groups[1].Value.Trim())" }
+    }
+  } catch {
+    # Deliberately empty. See the header above.
+  }
+  $global:LASTEXITCODE = $keep
+  return $note
+}
+
 ## One reading, as one line for the shared log: the numbers a later session needs to judge
 ## whether the handset it is about to measure was hot.
 function Format-SharedReading($Reading, [int] $Therm, [string] $Phase) {
@@ -452,6 +489,16 @@ switch ($act) {
     # that reached the panel. See Measure-Surface for why it is never gfxinfo.
     $window = if ($Seconds -gt 0) { $Seconds } else { 20 }
 
+    # WHAT THIS HANDSET WAS LEFT AT BY WHOEVER HAD IT LAST, asked ONCE and asked HERE: the
+    # lease is already claimed by this point, and the question has to be put before this
+    # session writes its own reading into the shared log, or the answer would be about the
+    # reading being taken right now. It refuses nothing; the answer is only a label.
+    $warmStart = Get-WarmStartNote
+    if ($warmStart) {
+      Write-Host "   $warmStart" -ForegroundColor Yellow
+      Write-Host "   The opening numbers below are a warm start, not a baseline."
+    }
+
     # --- the opening reading ------------------------------------------------
     if ($Soak -gt 0) { Write-Host "opening reading" }
     $first = Measure-Surface $window
@@ -463,10 +510,15 @@ switch ($act) {
     # says whether a ten-minute soak is owed at all, and what the floor phone would see.
     $visuals = Show-Visuals
 
+    # The note rides on the RECORD and not only on the screen. A warm start that lives in one
+    # session's scrollback is a warm start the session reading NOTES.md next month cannot see,
+    # and it will read the number as this game's own regression.
+    $warmSuffix = if ($warmStart) { "; $warmStart" } else { '' }
+
     if ($Soak -le 0) {
       if ($first.Found) {
-        Write-PhoneReading ("$(Get-Date -Format 'yyyy-MM-dd HH:mm')  spot     p50 $($first.p50) p90 $($first.p90) p95 $($first.p95) p99 $($first.p99) ms over $($first.Frames) frames, thermal $(Format-Thermal $firstTherm); $visuals")
-        Write-SharedPhoneLog ((Format-SharedReading $first $firstTherm 'spot') + "; $visuals")
+        Write-PhoneReading ("$(Get-Date -Format 'yyyy-MM-dd HH:mm')  spot     p50 $($first.p50) p90 $($first.p90) p95 $($first.p95) p99 $($first.p99) ms over $($first.Frames) frames, thermal $(Format-Thermal $firstTherm); $visuals$warmSuffix")
+        Write-SharedPhoneLog ((Format-SharedReading $first $firstTherm 'spot') + "; $visuals$warmSuffix")
       }
       Write-Host ""
       if ($visuals -match 'soak 10 is owed') {
@@ -504,7 +556,7 @@ switch ($act) {
     # --- the record ---------------------------------------------------------
     $stampNow = Get-Date -Format 'yyyy-MM-dd HH:mm'
     if ($first.Found) {
-      Write-PhoneReading ("$stampNow  opening  p50 $($first.p50) p90 $($first.p90) p95 $($first.p95) p99 $($first.p99) ms over $($first.Frames) frames, thermal $(Format-Thermal $firstTherm); $visuals")
+      Write-PhoneReading ("$stampNow  opening  p50 $($first.p50) p90 $($first.p90) p95 $($first.p95) p99 $($first.p99) ms over $($first.Frames) frames, thermal $(Format-Thermal $firstTherm); $visuals$warmSuffix")
     }
     if ($second.Found) {
       Write-PhoneReading ("$stampNow  +$Soak min  p50 $($second.p50) p90 $($second.p90) p95 $($second.p95) p99 $($second.p99) ms over $($second.Frames) frames, thermal $(Format-Thermal $secondTherm)")
@@ -512,7 +564,10 @@ switch ($act) {
     # Into the shared log, both ends of the soak. The SECOND reading is the one that tells the
     # next session what state it is inheriting: a handset left at MODERATE after ten minutes
     # of play is not a baseline for anybody for a while.
-    if ($first.Found) { Write-SharedPhoneLog (Format-SharedReading $first $firstTherm 'opening') }
+    # The warm-start note goes on the OPENING reading only. By the second reading the handset
+    # is hot because this game just played on it for $Soak minutes, which is the measurement,
+    # not a contaminant.
+    if ($first.Found) { Write-SharedPhoneLog ((Format-SharedReading $first $firstTherm 'opening') + $warmSuffix) }
     if ($second.Found) { Write-SharedPhoneLog (Format-SharedReading $second $secondTherm "after $Soak min of play") }
 
     # --- the verdict --------------------------------------------------------
