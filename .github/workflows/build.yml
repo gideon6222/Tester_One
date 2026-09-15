@@ -245,6 +245,36 @@ jobs:
           files: build/*.apk
           generate_release_notes: true
 
+      # KEEP THE LAST FEW TEST BUILDS AND DELETE THE REST. A build-N release
+      # exists so the phone's Update button has a stable URL, and the Porter
+      # always reads the NEWEST release (agent\install.ps1, Get-ApkSource), so
+      # an older build-N is unreachable by anything in the studio the moment a
+      # newer one exists. Nothing deleted them, so they accumulated: measured
+      # 2026-09-14, 257 build releases holding about 9 GB across the six games,
+      # 99 of them on stillwater alone, against 584 MB of actual ships.
+      #
+      # v* releases are never touched. That is the ship, it is what the store
+      # and the changelog point at, and it is the one thing here worth keeping
+      # for good. The grep is anchored so a tag like v1.2-build-3 cannot match.
+      #
+      # Runs only when this job published a build-N, so a ship does no pruning.
+      - name: Keep only the last few test builds
+        if: env.EXPORT == 'true' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KEEP: 3
+        run: |
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 \
+            --json tagName,createdAt \
+            --jq '.[] | select(.tagName | test("^build-[0-9]+$")) | [.createdAt, .tagName] | @tsv' \
+            | sort -r | tail -n +$((KEEP + 1)) | cut -f2 > /tmp/old-builds.txt || true
+          echo "pruning $(wc -l < /tmp/old-builds.txt) old test build(s), keeping $KEEP"
+          while read -r tag; do
+            [ -n "$tag" ] || continue
+            gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag \
+              && echo "  deleted $tag" || echo "  could not delete $tag"
+          done < /tmp/old-builds.txt
+
   # ── Play release ───────────────────────────────────────────────────────────
   #
   # Only on a version tag, because this is the artifact that goes to a store
