@@ -277,8 +277,12 @@ function Write-SharedPhoneLog([string] $Detail) {
   try {
     $logScript = 'C:\dev\gamedev-notes\scripts\phone-log.ps1'
     if (Test-Path -LiteralPath $logScript) {
-      if ($Phone -ne 'main') { $Detail = "[$Phone phone] $Detail" }
-      & $logScript append -Owner $slug -Event 'perf' -Detail $Detail *> $null
+      # -Phone is the log's fifth column (2026-09-15). Thermal carries between games but not
+      # between handsets, so a reading that does not say which phone it was taken on tells the
+      # next session nothing: a soak on the floor S22+ says nothing about how warm his S26
+      # Ultra is. The old habit of prefixing the detail text is gone with the column, which
+      # `phone.ps1 history` reads back by name.
+      & $logScript append -Owner $slug -Event 'perf' -Detail $Detail -Phone $Phone *> $null
     }
   } catch {
     # Deliberately empty. See the header above.
