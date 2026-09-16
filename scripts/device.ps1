@@ -754,6 +754,15 @@ function Write-PassRecord($Record) {
   Write-Host "   record: $path  (scripts\device.ps1 pass -Show prints it)"
 }
 
+## HOW LONG A PASS LETS A RELAUNCHED GAME SETTLE before it measures it.
+##
+## The template's low tier read 30 fps for its first twenty seconds after a relaunch and then
+## held 60 on a second reading forty seconds in (DEVICE.md, measured 2026-09-13), so a pass
+## that measures immediately measures the relaunch and reports a game that has got slower.
+## A named constant rather than a literal because C:\dev\gamedev-notes\scripts\phone-tests.ps1
+## rewrites it to 0 in the copy it drives, the same discipline it uses for the lease path.
+$SettleSeconds = 40
+
 $act = $Action.ToLower()
 
 ## `pass -Show` reads one local file. No device check, no lease, no adb, the same class as
@@ -924,8 +933,8 @@ switch ($act) {
       # read 30 fps and then held 60 on a second reading forty seconds in (DEVICE.md, measured
       # 2026-09-13). A pass that measures immediately measures the relaunch, which looks
       # exactly like a game that has got slower.
-      Write-Host "   settling for 40 s before the reading (DEVICE.md: a relaunch reads low for about twenty)"
-      Start-Sleep -Seconds 40
+      Write-Host "   settling for $SettleSeconds s before the reading (DEVICE.md: a relaunch reads low for about twenty)"
+      Start-Sleep -Seconds $SettleSeconds
 
       $window = if ($Seconds -gt 0) { $Seconds } else { 20 }
       Write-Host ''
@@ -947,7 +956,7 @@ switch ($act) {
           Write-Host "   no low reading: $why" -ForegroundColor Yellow
           $notes += "no low reading: $why"
         } else {
-          Start-Sleep -Seconds 40
+          Start-Sleep -Seconds $SettleSeconds
           $low = Invoke-Perf $window 0 'low'
           $readings += $low
           if ($low.SoakOwed) { $soakOwed = $true }
@@ -970,8 +979,13 @@ switch ($act) {
       if ($Soak -gt 0 -and $soakOwed) {
         Write-Host ''
         Write-Host "the reading owes a soak, and -Soak $Soak was passed" -ForegroundColor Cyan
-        $soak = Invoke-Perf $window $Soak "soak $Soak min"
-        $readings += $soak
+        # **NOT `$soak`.** PowerShell variable names are case-insensitive, so a `$soak` at
+        # script scope IS this script's own `[int] $Soak` parameter, and assigning a hashtable
+        # to it fails the param block's type constraint with an ArgumentTransformationMetadata
+        # error raised against device.ps1 itself - after the whole pass has run and with no
+        # line number anywhere near the assignment. Measured here 2026-09-16.
+        $soakReading = Invoke-Perf $window $Soak "soak $Soak min"
+        $readings += $soakReading
         $soakTaken = $true
       } elseif ($Soak -gt 0) {
         Write-Host ''
@@ -995,7 +1009,16 @@ switch ($act) {
       }
 
       # --- one frame of what he would be looking at -------------------------------------------
-      $shotPath = Get-Screenshot "$stamp-pass"
+      #
+      # A failed screencap is a REFUSAL and not a failure of the pass: the readings above are
+      # the product, they are already in NOTES.md, and throwing here would throw away the
+      # record of a pass that has just spent the handset for a minute. Say so and carry on.
+      try {
+        $shotPath = Get-Screenshot "$stamp-pass"
+      } catch {
+        Write-Host "   no screenshot: $($_.Exception.Message)" -ForegroundColor Yellow
+        $notes += "no screenshot: $($_.Exception.Message)"
+      }
     } finally {
       Invoke-Phone 'release' | Out-Null
     }
