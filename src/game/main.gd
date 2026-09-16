@@ -56,6 +56,15 @@ var screens := ScreenStack.new()
 ## failure here rather than as a silent loss of the player's run.
 var saves_written := 0
 
+## Whether Android has already been told this game went away. It exists because
+## ONE HOME PRESS FIRES TWO NOTIFICATIONS (`DEVICE.md`, measured on snowball):
+## `NOTIFICATION_APPLICATION_PAUSED` and `NOTIFICATION_APPLICATION_FOCUS_OUT`
+## both arrive for the single press, so a handler on both that does not latch
+## writes the player's run twice for one departure. Cleared when the game comes
+## back, so leaving a second time saves a second time. `test/test_lifecycle.gd`
+## is the gate.
+var _backgrounded := false
+
 var _cam: Camera3D
 var _road: MeshInstance3D
 var _player: MeshInstance3D
@@ -678,6 +687,23 @@ func _save() -> void:
 		push_error("the run could not be saved to %s - the player will lose it" % SimSave.PATH)
 
 
+## The game going away: home, a call, the task switcher. Saves once per
+## departure, however many notifications Android sends for it.
+##
+## **The guard is the whole of this function and it is not defensive coding.**
+## One home press on his phone delivers `NOTIFICATION_APPLICATION_PAUSED` and
+## `NOTIFICATION_APPLICATION_FOCUS_OUT` (`DEVICE.md`), so without the latch every
+## departure writes the save file twice, which is two writes of the same run on a
+## path the player is already waiting on. `test/test_lifecycle.gd` asserts the
+## refusal, not just the saves.
+func _leave() -> void:
+	if _backgrounded:
+		return
+	_backgrounded = true
+	_ensure_booted()
+	_save()
+
+
 ## THE STACK IS EMPTY AT BOOT, and this is a rule about the template rather than
 ## a detail of this file.
 ##
@@ -688,7 +714,21 @@ func _save() -> void:
 ## nothing. So a game built from here opens ON the game, and anything it wants
 ## in front of the player is pushed by a player action, never by `_ready`.
 ## `test/test_back_button.gd` asserts the empty boot for that reason.
+##
+## IT ALSO ANSWERS THE OTHER WAY A PHONE GAME IS LEFT, which is the commoner
+## one: the player presses home, or a call arrives, and Android never sends a
+## back request at all. Android gives no promise that the process survives that,
+## so the run is written to disk on the way out. One home press fires BOTH
+## `NOTIFICATION_APPLICATION_PAUSED` and `NOTIFICATION_APPLICATION_FOCUS_OUT`
+## (`DEVICE.md`, measured on snowball), hence the latch in `_leave()`: two
+## notifications for one departure must write one save and not two.
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+		_leave()
+		return
+	if what == NOTIFICATION_APPLICATION_RESUMED or what == NOTIFICATION_APPLICATION_FOCUS_IN:
+		_backgrounded = false
+		return
 	if what != NOTIFICATION_WM_GO_BACK_REQUEST:
 		return
 	if back_pressed() != "quit":
