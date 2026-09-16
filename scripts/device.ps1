@@ -14,6 +14,25 @@
   cannot see.
 
 .EXAMPLE
+  scripts\device.ps1 pass               # THE PHONE PASS. One claim, one release, one record.
+                                        # install, launch, a 20 s reading on the default tier,
+                                        # the log scanned for ERROR, a screenshot. It writes
+                                        # build\last-phone-pass.json and a stamped line per
+                                        # reading into NOTES.md under '## Phone readings'.
+  scripts\device.ps1 pass -Visuals      # also switch to low, relaunch and take a second reading
+  scripts\device.ps1 pass -Visuals -Phone floor   # where the low reading belongs (DEVICE.md)
+  scripts\device.ps1 pass -Soak 10      # and the soak, but ONLY if the reading says one is owed
+  scripts\device.ps1 pass -Show         # what the last pass found, without touching the phone
+
+  WHAT THE PASS ASKS, AND WHAT IT DELIBERATELY DOES NOT, IS ONE TABLE AND IT IS NOT HERE:
+  C:\dev\gamedev-notes\DEVICE.md, "The phone pass, and the only four questions the phone is
+  for". Four questions only a handset can answer (GPU ms at the default tier, GPU ms on low on
+  the floor phone, thermal over ten minutes when the duty says a soak is owed, and real touch
+  with hit boxes, audio ducking and haptics), and a second table naming the desk test that
+  answers everything else. Quote that table, never restate it (INDEX.md rule 10). The actions
+  below are the parts the pass is assembled from and are still there for a question the pass
+  does not ask.
+
   scripts\device.ps1 install            # adb install -r -g build\<slug>.apk (and claims the phone)
   scripts\device.ps1 launch             # force-stop and start, waits for the window
   scripts\device.ps1 log                # live: every print() and error (tag "godot"). Ctrl+C to stop
@@ -62,7 +81,13 @@ param(
   ## C:\dev\.studio\phones.json through phone.ps1, and adb is pointed at that serial through
   ## ANDROID_SERIAL so two handsets on one cable never get each other's install. A role with
   ## no serial recorded means whatever single device is attached, as it always did.
-  [string] $Phone = 'main'
+  [string] $Phone = 'main',
+  ## `pass` only. Also switch the game to the low tier, relaunch, and take a second reading.
+  ## The low reading belongs on the floor phone (`-Phone floor`), where perf judges it against
+  ## a 60 fps frame directly instead of predicting it by ratio (DEVICE.md).
+  [switch] $Visuals,
+  ## `pass` only. Print build\last-phone-pass.json and stop. Takes no lease, touches no handset.
+  [switch] $Show
 )
 $ErrorActionPreference = 'Stop'
 
@@ -88,6 +113,30 @@ $component = "$pkg/com.godot.game.GodotAppLauncher"
 $outDir = Join-Path $root 'build\phone'
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+
+## WHICH BUILD A READING IS ABOUT, resolved once and written onto every line.
+##
+## `## Phone readings` in NOTES.md is append-only and grows for the life of the game, and until
+## 2026-09-16 a line there carried a timestamp and nothing else - so a reader six weeks later
+## could see that a reading was taken and not which build it was taken of. A reading that cannot
+## be tied to a build cannot say whether the number moved, which is the only question anybody
+## asks of a second reading. The version is the presets' own, the head is git's, and both are
+## asked rather than trusted: a repo with no commits yet leaves the head empty rather than
+## aborting, the fallback shape scripts\stamp.ps1 and scripts\deliver.ps1 both use.
+$version = [regex]::Match($presets, 'version/name="([^"]+)"').Groups[1].Value
+$head = ''
+try { $head = (Native { & git -C $root rev-parse --short=7 HEAD 2>$null } | Out-String).Trim() } catch { }
+$buildStamp = ''
+try {
+  $stampPath = Join-Path $root 'src\build_stamp.gd'
+  if (Test-Path -LiteralPath $stampPath) {
+    $buildStamp = [regex]::Match([System.IO.File]::ReadAllText($stampPath), 'SHA\s*:=\s*"([^"]*)"').Groups[1].Value
+  }
+} catch { }
+$buildTag = (@(
+    $(if ($version) { "v$version" } else { '' })
+    $(if ($head) { $head } else { '' })
+  ) | Where-Object { $_ }) -join ' '
 
 function Adb { param([Parameter(ValueFromRemainingArguments)] $a) Native { & $adb @a }; if ($LASTEXITCODE -ne 0) { throw "adb $($a -join ' ') failed" } }
 function Require-Device {
@@ -297,6 +346,9 @@ function Format-Thermal([int] $Status) {
 ## which is where setup\game-stubs\godot-NOTES.md puts it.
 function Write-PhoneReading([string] $Line) {
   if ($Phone -ne 'main') { $Line = "[$Phone phone] $Line" }
+  # WHICH BUILD, on the line itself. See $buildTag above: a reading with no build behind it
+  # cannot answer the only question a second reading is ever taken to answer.
+  if ($buildTag) { $Line = "$Line  [$buildTag]" }
   $notes = Join-Path $root 'NOTES.md'
   if (-not (Test-Path -LiteralPath $notes)) {
     Write-Host "   (no NOTES.md here, so this reading is recorded nowhere and the next session will take it again)" -ForegroundColor Yellow
@@ -453,6 +505,164 @@ function Show-Visuals {
   return "$line; $judge"
 }
 
+## ONE PERF READING, and the soak when one is genuinely asked for.
+##
+## THIS IS A FUNCTION SO THAT `perf` AND `pass` RUN THE SAME CODE. The judgement, the NOTES.md
+## line, the shared-log line and the soak verdict are the product of this script, and a second
+## copy of them written for the pass is a second set of numbers that quietly disagree with the
+## first. The `perf` action below is now a one-line caller and nothing about it changed.
+##
+## It returns a hashtable as well as printing, for the reason Measure-Surface's own header
+## gives: `pass` writes these numbers into build\last-phone-pass.json, and a function that only
+## prints can only be read by a human. `Found` false means NOTHING WAS MEASURED and must never
+## be reported as a zero.
+function Invoke-Perf([int] $Window, [int] $SoakMinutes, [string] $Label = '') {
+  $out = @{
+    Label     = $Label
+    Found     = $false
+    Visuals   = ''
+    SoakOwed  = $false
+    SoakTaken = ($SoakMinutes -gt 0)
+    Verdict   = ''
+  }
+
+  # WHAT THIS HANDSET WAS LEFT AT BY WHOEVER HAD IT LAST, asked ONCE and asked HERE: the
+  # lease is already claimed by this point, and the question has to be put before this
+  # session writes its own reading into the shared log, or the answer would be about the
+  # reading being taken right now. It refuses nothing; the answer is only a label.
+  $warmStart = Get-WarmStartNote
+  if ($warmStart) {
+    Write-Host "   $warmStart" -ForegroundColor Yellow
+    Write-Host "   The opening numbers below are a warm start, not a baseline."
+  }
+
+  # --- the opening reading ------------------------------------------------
+  if ($SoakMinutes -gt 0) { Write-Host "opening reading" }
+  $first = Measure-Surface $Window
+  Show-Surface $first
+  $firstTherm = Get-ThermalStatus
+  Write-Host "   thermal        $(Format-Thermal $firstTherm)"
+  Write-Host "   (0 is no throttling; 1+ means the phone is backing off)"
+  # The game's own GPU cost, judged against its tier's budget. This is the reading that
+  # says whether a ten-minute soak is owed at all, and what the floor phone would see.
+  $visuals = Show-Visuals
+  $out.Visuals = $visuals
+  # The tier the game was actually running, read back off its own VISUALS line rather than
+  # assumed. `pass -Visuals` uses it to put the tier back the way it found it, so a pass never
+  # leaves his phone on low.
+  $out.Tier = [regex]::Match($visuals, '^visuals (\w+)').Groups[1].Value
+  $out.SoakOwed = [bool]($visuals -match 'soak 10 is owed')
+  $out.Found = [bool]$first.Found
+  $out.Thermal = Format-Thermal $firstTherm
+  foreach ($q in 'p50', 'p90', 'p95', 'p99') { if ($first.ContainsKey($q)) { $out[$q] = $first[$q] } }
+  $out.Frames = $first.Frames
+
+  # The note rides on the RECORD and not only on the screen. A warm start that lives in one
+  # session's scrollback is a warm start the session reading NOTES.md next month cannot see,
+  # and it will read the number as this game's own regression.
+  $warmSuffix = if ($warmStart) { "; $warmStart" } else { '' }
+  $out.WarmStart = [bool]$warmStart
+
+  if ($SoakMinutes -le 0) {
+    if ($first.Found) {
+      Write-PhoneReading ("$(Get-Date -Format 'yyyy-MM-dd HH:mm')  spot     p50 $($first.p50) p90 $($first.p90) p95 $($first.p95) p99 $($first.p99) ms over $($first.Frames) frames, thermal $(Format-Thermal $firstTherm); $visuals$warmSuffix")
+      Write-SharedPhoneLog ((Format-SharedReading $first $firstTherm 'spot') + "; $visuals$warmSuffix")
+    }
+    Write-Host ""
+    if ($out.SoakOwed) {
+      Write-Host "   For the throttling answer, run: scripts\device.ps1 pass -Soak 10"
+    } else {
+      Write-Host "   No soak is owed at this duty cycle (DEVICE.md). Run pass -Soak 10 only if the reading above says so."
+    }
+    return $out
+  }
+
+  # --- the soak -----------------------------------------------------------
+  # THE THROTTLING QUESTION, asked once so no future session has to ask it again. Keep
+  # playing: the phone only heats up if the GPU is doing something, and a soak spent on a
+  # paused game measures a phone at rest and calls it a pass.
+  Write-Host ""
+  Write-Host "soaking for $SoakMinutes min - KEEP PLAYING, screen on, game in the foreground"
+  $end = (Get-Date).AddMinutes($SoakMinutes)
+  while ((Get-Date) -lt $end) {
+    $left = [int][math]::Ceiling(($end - (Get-Date)).TotalMinutes)
+    Write-Host "   $left min left..."
+    Start-Sleep -Seconds ([math]::Min(60, [math]::Max(1, ($end - (Get-Date)).TotalSeconds)))
+    # Renew inside the loop as well as up front. A soak longer than the lease that only
+    # claimed once would expire halfway and the second reading would be of whatever the
+    # next session put on the screen.
+    Invoke-Phone 'claim' ($SoakMinutes + 5) | Out-Null
+  }
+
+  Write-Host ""
+  Write-Host "second reading, after $SoakMinutes min of play"
+  $second = Measure-Surface $Window
+  Show-Surface $second
+  $secondTherm = Get-ThermalStatus
+  Write-Host "   thermal        $(Format-Thermal $secondTherm)"
+
+  # --- the record ---------------------------------------------------------
+  $stampNow = Get-Date -Format 'yyyy-MM-dd HH:mm'
+  if ($first.Found) {
+    Write-PhoneReading ("$stampNow  opening  p50 $($first.p50) p90 $($first.p90) p95 $($first.p95) p99 $($first.p99) ms over $($first.Frames) frames, thermal $(Format-Thermal $firstTherm); $visuals$warmSuffix")
+  }
+  if ($second.Found) {
+    Write-PhoneReading ("$stampNow  +$SoakMinutes min  p50 $($second.p50) p90 $($second.p90) p95 $($second.p95) p99 $($second.p99) ms over $($second.Frames) frames, thermal $(Format-Thermal $secondTherm)")
+  }
+  # Into the shared log, both ends of the soak. The SECOND reading is the one that tells the
+  # next session what state it is inheriting: a handset left at MODERATE after ten minutes
+  # of play is not a baseline for anybody for a while.
+  # The warm-start note goes on the OPENING reading only. By the second reading the handset
+  # is hot because this game just played on it for $SoakMinutes minutes, which is the
+  # measurement, not a contaminant.
+  if ($first.Found) { Write-SharedPhoneLog ((Format-SharedReading $first $firstTherm 'opening') + $warmSuffix) }
+  if ($second.Found) { Write-SharedPhoneLog (Format-SharedReading $second $secondTherm "after $SoakMinutes min of play") }
+
+  # --- the verdict --------------------------------------------------------
+  # **No layer, no verdict.** A missing SurfaceFlinger layer means nothing was measured,
+  # and the one thing this must never do is print a reassuring zero for a reading that
+  # never happened - which is exactly the gfxinfo failure that made every frame number in
+  # this studio worthless until it was caught.
+  Write-Host ""
+  if (-not $first.Found -or -not $second.Found) {
+    $which = if (-not $first.Found -and -not $second.Found) { 'Neither reading' } elseif (-not $first.Found) { 'The opening reading' } else { 'The second reading' }
+    Write-Host "   NO VERDICT. $which found no SurfaceFlinger layer for $pkg, so nothing was measured." -ForegroundColor Yellow
+    Write-Host "   Put the game in the foreground with the screen on and run it again. An unmeasured soak is not a pass."
+    Write-Host ""
+    Write-PhoneReading "$stampNow  NO VERDICT: $which found no SurfaceFlinger layer, so the throttling question is still open."
+    $out.Verdict = "NO VERDICT: $which found no SurfaceFlinger layer"
+    $out.Found = $false
+    return $out
+  }
+
+  # POLISH.md's three numbers, and all three have to hold.
+  $budget = 16.7
+  $drift = if ($first.p95 -gt 0) { ($second.p95 - $first.p95) / [double]$first.p95 * 100.0 } else { 0.0 }
+  $faults = @()
+  if ($first.p95 -gt $budget) { $faults += "the opening p95 is $($first.p95) ms, over the $budget ms 60 fps budget" }
+  if ($second.p95 -gt $budget) { $faults += "the p95 after $SoakMinutes min is $($second.p95) ms, over the $budget ms 60 fps budget" }
+  if ($drift -gt 20.0) { $faults += ("the p95 rose {0:n0}% over the soak ({1} -> {2} ms), past the 20% POLISH allows" -f $drift, $first.p95, $second.p95) }
+  # A thermal status that could not be read is not a pass. LIGHT is the worst POLISH allows.
+  if ($secondTherm -lt 0) { $faults += "the thermal status could not be read, so it is unknown rather than fine" }
+  elseif ($secondTherm -gt 1) { $faults += "thermal reached $(Format-Thermal $secondTherm) after $SoakMinutes min, worse than the LIGHT that POLISH allows" }
+
+  $verdict = if ($faults.Count -eq 0) {
+    "PASS: p95 {0} -> {1} ms ({2:n0}% over {3} min, both under {4} ms), thermal {5}" -f $first.p95, $second.p95, $drift, $SoakMinutes, $budget, (Format-Thermal $secondTherm)
+  } else {
+    "FAIL: $($faults -join '; ')"
+  }
+  $colour = if ($faults.Count -eq 0) { 'Green' } else { 'Red' }
+  Write-Host "   THROTTLING VERDICT (POLISH.md, Performance and stability)" -ForegroundColor $colour
+  Write-Host "   $verdict" -ForegroundColor $colour
+  Write-Host ""
+  Write-PhoneReading "$stampNow  verdict  $verdict"
+  Write-Host "   Both readings and the verdict are in NOTES.md under '## Phone readings'."
+  $out.Verdict = $verdict
+  $out.SecondThermal = Format-Thermal $secondTherm
+  $out.SecondP95 = $second.p95
+  return $out
+}
+
 function Sheet($video, $sheet) {
   $ffmpeg = Resolve-Ffmpeg
   if ($ffmpeg) {
@@ -463,7 +673,97 @@ function Sheet($video, $sheet) {
   }
 }
 
+## THE STEPS OF A PASS, each one also still an action of its own.
+##
+## They are functions for the reason Invoke-Perf is: `pass` runs exactly what `install`,
+## `launch`, `tier`, `log -Dump` and `shot` run, rather than a second copy of each that drifts
+## from it. Every one of these branches below is now a one-line caller.
+
+function Install-Build {
+  $path = Join-Path $root $apk
+  if (-not (Test-Path $path)) { throw "no APK at $path; export first" }
+  Adb install -r -g $path
+  Write-Host "installed $pkg"
+}
+
+function Start-Game {
+  # **Quoted, because PowerShell binds parameters before it hands anything to
+  # adb.** `-W` prefix-matches the common parameters -WarningAction and
+  # -WarningVariable, so an unquoted `-W` here is an AmbiguousParameter error
+  # against device.ps1 itself and adb is never reached. `launch` had never
+  # once worked. Quoting makes each flag a value rather than a parameter name;
+  # any adb flag starting with w, v, d or c needs the same treatment.
+  Adb shell am start '-W' '-S' '-n' $component | Out-Null
+  Write-Host "launched $component"
+}
+
+function Get-Screenshot([string] $Name) {
+  $f = Join-Path $outDir "$Name.png"
+  # exec-out to a FILE; piping the bytes through PowerShell corrupts them.
+  Native { & cmd /c "`"$adb`" exec-out screencap -p > `"$f`"" }
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $f) -or (Get-Item $f).Length -lt 1000) { throw "screencap failed" }
+  Write-Host "shot: $f"
+  return $f
+}
+
+## Switch the visuals tier on the phone and relaunch, for a reading per tier. Writes the same
+## user://visuals.json the settings screen writes, through run-as, which a debug build allows.
+##
+## It RETURNS the reason it could not rather than throwing, because the two reasons are
+## refusals and `pass` answers a refusal with exit 0: a release build has no run-as and the
+## tier is then picked on the settings screen. The `tier` action throws on the same string, so
+## nothing about that action changed.
+function Set-VisualsTier([string] $Tier) {
+  # Piped through a pushed file rather than quoted on the command line: every layer between
+  # here and the phone's sh (PowerShell, adb, the remote shell) strips a level of quoting, and
+  # the first version of this landed `{tier:high}` on the phone, which the game refused.
+  $json = '{"tier":"' + $Tier + '"}'
+  $local = Join-Path $outDir 'visuals.json'
+  [System.IO.File]::WriteAllText($local, $json, (New-Object System.Text.UTF8Encoding($false)))
+  Adb push $local /data/local/tmp/visuals.json | Out-Null
+  # `files/` is created by the app on its first run, so on a fresh install it is not there yet.
+  Native { & $adb shell run-as $pkg mkdir -p files }
+  Native { & $adb shell run-as $pkg cp /data/local/tmp/visuals.json files/visuals.json }
+  if ($LASTEXITCODE -ne 0) { return "run-as $pkg refused, which means this is not a debug build; pick the tier on the settings screen instead" }
+  $back = (Native { & $adb shell run-as $pkg cat files/visuals.json }) -join ''
+  if ($back.Trim() -ne $json) { return "the tier file on the phone reads '$back', not '$json'; the quoting was eaten somewhere on the way" }
+  Adb shell am start '-W' '-S' '-n' $component | Out-Null
+  Write-Host "visuals tier $Tier written and $pkg relaunched; give it ten seconds, then perf reads the VISUALS line"
+  return ''
+}
+
+## Every ERROR line the run left in logcat. POLISH.md asks for none across a full play session,
+## and the pass reads it under the lease it already holds rather than booking a second one.
+##
+## `-cmatch`, case-sensitive on purpose: Godot's own is `ERROR:` and `E/`, and a game that
+## prints the word "error" in a piece of player-facing text is not a fault.
+function Get-LogErrors {
+  $lines = try { Native { & $adb logcat -d -s godot 2>$null } } catch { @() }
+  return @(@($lines) | Where-Object { "$_" -cmatch 'ERROR' })
+}
+
+## THE PASS'S OWN RECORD, on scripts\deliver.ps1's build\last-delivery.json pattern: a whole
+## temp file and one Move-Item -Force, so a reader can never see half of it. build\ is
+## gitignored, so this is never committed - the readings that ARE committed are the NOTES.md
+## lines under '## Phone readings'.
+function Write-PassRecord($Record) {
+  $path = Join-Path $root 'build\last-phone-pass.json'
+  $tmp = "$path.tmp"
+  [System.IO.File]::WriteAllText($tmp, ($Record | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
+  Move-Item -LiteralPath $tmp -Destination $path -Force
+  Write-Host "   record: $path  (scripts\device.ps1 pass -Show prints it)"
+}
+
 $act = $Action.ToLower()
+
+## `pass -Show` reads one local file. No device check, no lease, no adb, the same class as
+## phone.ps1's own read-only actions, so it is answered before any of them run.
+if ($act -eq 'pass' -and $Show) {
+  $record = Join-Path $root 'build\last-phone-pass.json'
+  if (Test-Path -LiteralPath $record) { Write-Output ([System.IO.File]::ReadAllText($record)) }
+  else { Write-Output "device: no phone pass has been taken in $root yet" }
+  exit 0
+}
 
 # The device check comes FIRST and the claim second, on purpose. "No phone connected" and
 # "another game has the phone" are different reports and want different answers, and claiming
@@ -472,14 +772,30 @@ $act = $Action.ToLower()
 # reason a pass ends, and a lease you cannot give back because the cable came out is a lease
 # the next game waits twenty minutes for.
 if ($act -ne 'release') {
-  Require-Device
+  # **A REFUSAL IS AN ANSWER, AND FOR `pass` IT IS AN exit 0**, the shape scripts\deliver.ps1
+  # uses and for the same reason: a pass is meant to be run at every beat that owes one, and a
+  # beat that exits 1 because the cable is out reads exactly like a broken build. The BUSY
+  # PHONE keeps its 75 - that is the one refusal a caller has to tell apart, because it means
+  # finish the desk pass and come back rather than that there is nothing to come back to.
+  if ($act -eq 'pass') {
+    try { Require-Device } catch {
+      Write-Host "no pass taken: $($_.Exception.Message)" -ForegroundColor Yellow
+      Write-Host "   Nothing about this build was judged on a handset, so the phone pass is still owed (DEVICE.md)."
+      exit 0
+    }
+  } else {
+    Require-Device
+  }
   # A live logcat blocks until Ctrl+C, so it books the phone for an hour. Everything else is
   # seconds long and renews the default 20 minutes as it goes.
   # A soak books the phone for the whole run up front. The two readings are 20 s each and the
   # sleep between them is the soak, so the claim has to outlast all three or the lease expires
   # mid-measurement and another session takes the handset out from under the second reading -
   # which does not fail, it just quietly measures a different game.
-  $minutes = if ($act -eq 'log' -and -not $Dump) { 60 } elseif ($act -eq 'perf' -and $Soak -gt 0) { $Soak + 5 } else { 20 }
+  # A pass books the handset for the whole of itself in one claim, for the same reason the soak
+  # does: its steps are an install, a settle, two readings and a screenshot, and a lease that
+  # expires between them hands the phone to another game mid-pass.
+  $minutes = if ($act -eq 'log' -and -not $Dump) { 60 } elseif ($act -eq 'perf' -and $Soak -gt 0) { $Soak + 5 } elseif ($act -eq 'pass') { if ($Soak -gt 0) { $Soak + 10 } else { 20 } } else { 20 }
   if ((Invoke-Phone 'claim' $minutes) -eq 75) {
     Write-PhoneDebt $act
     # The queue joins itself. See Write-PhoneWant: neither call above may change the 75.
@@ -490,33 +806,13 @@ if ($act -ne 'release') {
 
 switch ($act) {
   'release' { Invoke-Phone 'release' | Out-Null }
-  'install' {
-    $path = Join-Path $root $apk
-    if (-not (Test-Path $path)) { throw "no APK at $path; export first" }
-    Adb install -r -g $path
-    Write-Host "installed $pkg"
-  }
+  'install' { Install-Build }
   'uninstall' { Adb uninstall $pkg }
-  'launch' {
-    # **Quoted, because PowerShell binds parameters before it hands anything to
-    # adb.** `-W` prefix-matches the common parameters -WarningAction and
-    # -WarningVariable, so an unquoted `-W` here is an AmbiguousParameter error
-    # against device.ps1 itself and adb is never reached. `launch` had never
-    # once worked. Quoting makes each flag a value rather than a parameter name;
-    # any adb flag starting with w, v, d or c needs the same treatment.
-    Adb shell am start '-W' '-S' '-n' $component | Out-Null
-    Write-Host "launched $component"
-  }
+  'launch' { Start-Game }
   'log' {
     if ($Dump) { & $adb logcat -d -s godot } else { Write-Host "Ctrl+C to stop"; & $adb logcat -s godot }
   }
-  'shot' {
-    $f = Join-Path $outDir "$stamp.png"
-    # exec-out to a FILE; piping the bytes through PowerShell corrupts them.
-    Native { & cmd /c "`"$adb`" exec-out screencap -p > `"$f`"" }
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $f) -or (Get-Item $f).Length -lt 1000) { throw "screencap failed" }
-    Write-Host "shot: $f"
-  }
+  'shot' { Get-Screenshot $stamp | Out-Null }
   'record' {
     $secs = if ($Rest -and $Rest[0]) { [int]$Rest[0] } else { 20 }
     if ($secs -gt 180) { $secs = 180 }
@@ -530,126 +826,12 @@ switch ($act) {
   'perf' {
     # `--timestats` measures the layer the game actually presents to, so these are the frames
     # that reached the panel. See Measure-Surface for why it is never gfxinfo.
+    #
+    # The reading itself lives in Invoke-Perf above, because `pass` below takes the same one
+    # and two copies of a judgement are two judgements that drift. Nothing about this action
+    # changed when it moved.
     $window = if ($Seconds -gt 0) { $Seconds } else { 20 }
-
-    # WHAT THIS HANDSET WAS LEFT AT BY WHOEVER HAD IT LAST, asked ONCE and asked HERE: the
-    # lease is already claimed by this point, and the question has to be put before this
-    # session writes its own reading into the shared log, or the answer would be about the
-    # reading being taken right now. It refuses nothing; the answer is only a label.
-    $warmStart = Get-WarmStartNote
-    if ($warmStart) {
-      Write-Host "   $warmStart" -ForegroundColor Yellow
-      Write-Host "   The opening numbers below are a warm start, not a baseline."
-    }
-
-    # --- the opening reading ------------------------------------------------
-    if ($Soak -gt 0) { Write-Host "opening reading" }
-    $first = Measure-Surface $window
-    Show-Surface $first
-    $firstTherm = Get-ThermalStatus
-    Write-Host "   thermal        $(Format-Thermal $firstTherm)"
-    Write-Host "   (0 is no throttling; 1+ means the phone is backing off)"
-    # The game's own GPU cost, judged against its tier's budget. This is the reading that
-    # says whether a ten-minute soak is owed at all, and what the floor phone would see.
-    $visuals = Show-Visuals
-
-    # The note rides on the RECORD and not only on the screen. A warm start that lives in one
-    # session's scrollback is a warm start the session reading NOTES.md next month cannot see,
-    # and it will read the number as this game's own regression.
-    $warmSuffix = if ($warmStart) { "; $warmStart" } else { '' }
-
-    if ($Soak -le 0) {
-      if ($first.Found) {
-        Write-PhoneReading ("$(Get-Date -Format 'yyyy-MM-dd HH:mm')  spot     p50 $($first.p50) p90 $($first.p90) p95 $($first.p95) p99 $($first.p99) ms over $($first.Frames) frames, thermal $(Format-Thermal $firstTherm); $visuals$warmSuffix")
-        Write-SharedPhoneLog ((Format-SharedReading $first $firstTherm 'spot') + "; $visuals$warmSuffix")
-      }
-      Write-Host ""
-      if ($visuals -match 'soak 10 is owed') {
-        Write-Host "   For the throttling answer, run: scripts\device.ps1 perf -Soak 10"
-      } else {
-        Write-Host "   No soak is owed at this duty cycle (DEVICE.md). Run perf -Soak 10 only if the reading above says so."
-      }
-      break
-    }
-
-    # --- the soak -----------------------------------------------------------
-    # THE THROTTLING QUESTION, asked once so no future session has to ask it again. Keep
-    # playing: the phone only heats up if the GPU is doing something, and a soak spent on a
-    # paused game measures a phone at rest and calls it a pass.
-    Write-Host ""
-    Write-Host "soaking for $Soak min - KEEP PLAYING, screen on, game in the foreground"
-    $end = (Get-Date).AddMinutes($Soak)
-    while ((Get-Date) -lt $end) {
-      $left = [int][math]::Ceiling(($end - (Get-Date)).TotalMinutes)
-      Write-Host "   $left min left..."
-      Start-Sleep -Seconds ([math]::Min(60, [math]::Max(1, ($end - (Get-Date)).TotalSeconds)))
-      # Renew inside the loop as well as up front. A soak longer than the lease that only
-      # claimed once would expire halfway and the second reading would be of whatever the
-      # next session put on the screen.
-      Invoke-Phone 'claim' ($Soak + 5) | Out-Null
-    }
-
-    Write-Host ""
-    Write-Host "second reading, after $Soak min of play"
-    $second = Measure-Surface $window
-    Show-Surface $second
-    $secondTherm = Get-ThermalStatus
-    Write-Host "   thermal        $(Format-Thermal $secondTherm)"
-
-    # --- the record ---------------------------------------------------------
-    $stampNow = Get-Date -Format 'yyyy-MM-dd HH:mm'
-    if ($first.Found) {
-      Write-PhoneReading ("$stampNow  opening  p50 $($first.p50) p90 $($first.p90) p95 $($first.p95) p99 $($first.p99) ms over $($first.Frames) frames, thermal $(Format-Thermal $firstTherm); $visuals$warmSuffix")
-    }
-    if ($second.Found) {
-      Write-PhoneReading ("$stampNow  +$Soak min  p50 $($second.p50) p90 $($second.p90) p95 $($second.p95) p99 $($second.p99) ms over $($second.Frames) frames, thermal $(Format-Thermal $secondTherm)")
-    }
-    # Into the shared log, both ends of the soak. The SECOND reading is the one that tells the
-    # next session what state it is inheriting: a handset left at MODERATE after ten minutes
-    # of play is not a baseline for anybody for a while.
-    # The warm-start note goes on the OPENING reading only. By the second reading the handset
-    # is hot because this game just played on it for $Soak minutes, which is the measurement,
-    # not a contaminant.
-    if ($first.Found) { Write-SharedPhoneLog ((Format-SharedReading $first $firstTherm 'opening') + $warmSuffix) }
-    if ($second.Found) { Write-SharedPhoneLog (Format-SharedReading $second $secondTherm "after $Soak min of play") }
-
-    # --- the verdict --------------------------------------------------------
-    # **No layer, no verdict.** A missing SurfaceFlinger layer means nothing was measured,
-    # and the one thing this must never do is print a reassuring zero for a reading that
-    # never happened - which is exactly the gfxinfo failure that made every frame number in
-    # this studio worthless until it was caught.
-    Write-Host ""
-    if (-not $first.Found -or -not $second.Found) {
-      $which = if (-not $first.Found -and -not $second.Found) { 'Neither reading' } elseif (-not $first.Found) { 'The opening reading' } else { 'The second reading' }
-      Write-Host "   NO VERDICT. $which found no SurfaceFlinger layer for $pkg, so nothing was measured." -ForegroundColor Yellow
-      Write-Host "   Put the game in the foreground with the screen on and run it again. An unmeasured soak is not a pass."
-      Write-Host ""
-      Write-PhoneReading "$stampNow  NO VERDICT: $which found no SurfaceFlinger layer, so the throttling question is still open."
-      break
-    }
-
-    # POLISH.md's three numbers, and all three have to hold.
-    $budget = 16.7
-    $drift = if ($first.p95 -gt 0) { ($second.p95 - $first.p95) / [double]$first.p95 * 100.0 } else { 0.0 }
-    $faults = @()
-    if ($first.p95 -gt $budget) { $faults += "the opening p95 is $($first.p95) ms, over the $budget ms 60 fps budget" }
-    if ($second.p95 -gt $budget) { $faults += "the p95 after $Soak min is $($second.p95) ms, over the $budget ms 60 fps budget" }
-    if ($drift -gt 20.0) { $faults += ("the p95 rose {0:n0}% over the soak ({1} -> {2} ms), past the 20% POLISH allows" -f $drift, $first.p95, $second.p95) }
-    # A thermal status that could not be read is not a pass. LIGHT is the worst POLISH allows.
-    if ($secondTherm -lt 0) { $faults += "the thermal status could not be read, so it is unknown rather than fine" }
-    elseif ($secondTherm -gt 1) { $faults += "thermal reached $(Format-Thermal $secondTherm) after $Soak min, worse than the LIGHT that POLISH allows" }
-
-    $verdict = if ($faults.Count -eq 0) {
-      "PASS: p95 {0} -> {1} ms ({2:n0}% over {3} min, both under {4} ms), thermal {5}" -f $first.p95, $second.p95, $drift, $Soak, $budget, (Format-Thermal $secondTherm)
-    } else {
-      "FAIL: $($faults -join '; ')"
-    }
-    $color = if ($faults.Count -eq 0) { 'Green' } else { 'Red' }
-    Write-Host "   THROTTLING VERDICT (POLISH.md, Performance and stability)" -ForegroundColor $color
-    Write-Host "   $verdict" -ForegroundColor $color
-    Write-Host ""
-    Write-PhoneReading "$stampNow  verdict  $verdict"
-    Write-Host "   Both readings and the verdict are in NOTES.md under '## Phone readings'."
+    Invoke-Perf $window $Soak 'perf' | Out-Null
   }
   'tap' { Adb shell input tap $Rest[0] $Rest[1] }
   'swipe' { Adb shell input swipe @Rest }
@@ -692,29 +874,172 @@ switch ($act) {
     Write-Host "thermal now: $(Format-Thermal (Get-ThermalStatus))"
     Write-Host "(record these in C:\dev\gamedev-notes\DEVICE.md when the phone is new or its settings changed)"
   }
-  # Switch the visuals tier on the phone and relaunch, for a reading per tier. Writes the
-  # same user://visuals.json the settings screen writes, through run-as, which a debug build
-  # allows. A release build refuses run-as, and the tier is then changed on the screen.
+  # Switch the visuals tier on the phone and relaunch, for a reading per tier. A release build
+  # refuses run-as, and the tier is then changed on the settings screen.
   'tier' {
     $tier = if ($Rest.Count -gt 0) { "$($Rest[0])".ToLower() } else { '' }
     if ($tier -notin @('low', 'medium', 'high')) { throw "tier low|medium|high" }
-    # Piped through stdin rather than quoted on the command line: every layer between here
-    # and the phone's sh (PowerShell, adb, the remote shell) strips a level of quoting, and
-    # the first version of this landed `{tier:high}` on the phone, which the game refused.
-    # So the file is written here, pushed to the phone's scratch dir, and copied in under the
-    # app's own uid, with no quoting anywhere on the way.
-    $json = '{"tier":"' + $tier + '"}'
-    $local = Join-Path $outDir 'visuals.json'
-    [System.IO.File]::WriteAllText($local, $json, (New-Object System.Text.UTF8Encoding($false)))
-    Adb push $local /data/local/tmp/visuals.json | Out-Null
-    # `files/` is created by the app on its first run, so on a fresh install it is not there yet.
-    Native { & $adb shell run-as $pkg mkdir -p files }
-    Native { & $adb shell run-as $pkg cp /data/local/tmp/visuals.json files/visuals.json }
-    if ($LASTEXITCODE -ne 0) { throw "run-as $pkg refused, which means this is not a debug build; pick the tier on the settings screen instead" }
-    $back = (Native { & $adb shell run-as $pkg cat files/visuals.json }) -join ''
-    if ($back.Trim() -ne $json) { throw "the tier file on the phone reads '$back', not '$json'; the quoting was eaten somewhere on the way" }
-    Adb shell am start '-W' '-S' '-n' $component | Out-Null
-    Write-Host "visuals tier $tier written and $pkg relaunched; give it ten seconds, then perf reads the VISUALS line"
+    $why = Set-VisualsTier $tier
+    if ($why) { throw $why }
+  }
+
+  # ==========================================================================================
+  # THE PHONE PASS. One claim, one release, one record, and the same four questions every time.
+  #
+  # WHAT IT ASKS IS NOT DECIDED HERE. C:\dev\gamedev-notes\DEVICE.md holds one table of the only
+  # four questions a handset can answer and a second naming the desk test that answers
+  # everything else, and this action is that table carried out. Quote it, never restate it
+  # (INDEX.md rule 10).
+  #
+  # WHY IT IS ONE ACTION AND NOT SIX. Measured in C:\dev\.phone-log.tsv on 2026-09-16: 46 perf
+  # readings over three days, all of them from four repos, while candle-gift was the named
+  # holder in sixteen refusals of other games and wrote no reading at all. Six sessions each
+  # assembling their own sequence of install, launch, perf, tier, log and shot produced six
+  # passes that could not be compared and a handful of games with no evidence on the record.
+  # A game now either ran this or did not.
+  #
+  # EVERY REFUSAL IS AN exit 0 EXCEPT A BUSY PHONE, which keeps its 75 up at the claim above.
+  # ==========================================================================================
+  'pass' {
+    $apkPath = Join-Path $root $apk
+    if (-not (Test-Path -LiteralPath $apkPath)) {
+      Write-Host "no APK at $apkPath, so there is nothing to put on the handset." -ForegroundColor Yellow
+      Write-Host "   Run scripts\check.ps1 -Export first, then this. The phone pass is still owed."
+      Invoke-Phone 'release' | Out-Null
+      exit 0
+    }
+
+    $readings = @()
+    $errorLines = @()
+    $shotPath = ''
+    $soakOwed = $false
+    $soakTaken = $false
+    $notes = @()
+
+    try {
+      Install-Build
+      Start-Game
+
+      # **A RELAUNCHED GAME READS SLOW FOR ITS FIRST TWENTY SECONDS** - the template's low tier
+      # read 30 fps and then held 60 on a second reading forty seconds in (DEVICE.md, measured
+      # 2026-09-13). A pass that measures immediately measures the relaunch, which looks
+      # exactly like a game that has got slower.
+      Write-Host "   settling for 40 s before the reading (DEVICE.md: a relaunch reads low for about twenty)"
+      Start-Sleep -Seconds 40
+
+      $window = if ($Seconds -gt 0) { $Seconds } else { 20 }
+      Write-Host ''
+      Write-Host "reading 1: the tier the game defaults to" -ForegroundColor Cyan
+      $first = Invoke-Perf $window 0 'the tier the game defaults to'
+      $readings += $first
+      if ($first.SoakOwed) { $soakOwed = $true }
+
+      # --- the low tier, where the floor phone judges it against the frame ------------------
+      if ($Visuals) {
+        Write-Host ''
+        Write-Host "reading 2: low" -ForegroundColor Cyan
+        if ($Phone -ne 'floor') {
+          Write-Host "   (this is the $Phone phone, so low is judged by prediction. The low reading belongs on the floor phone: pass -Visuals -Phone floor)" -ForegroundColor Yellow
+        }
+        $wasTier = "$($first.Tier)"
+        $why = Set-VisualsTier 'low'
+        if ($why) {
+          Write-Host "   no low reading: $why" -ForegroundColor Yellow
+          $notes += "no low reading: $why"
+        } else {
+          Start-Sleep -Seconds 40
+          $low = Invoke-Perf $window 0 'low'
+          $readings += $low
+          if ($low.SoakOwed) { $soakOwed = $true }
+          # **PUT THE TIER BACK.** user://visuals.json survives the pass, so a pass that walks
+          # away leaves his phone running the game on low and the next thing he picks up is a
+          # build that looks worse than the one he was sent.
+          if ($wasTier -and $wasTier -ne 'low') {
+            $back = Set-VisualsTier $wasTier
+            if ($back) { $notes += "the tier could not be put back to $wasTier`: $back" }
+          } elseif (-not $wasTier) {
+            $notes += 'the tier before this pass could not be read, so the phone has been left on low'
+          }
+        }
+      }
+
+      # --- the soak, and only when it is genuinely owed --------------------------------------
+      #
+      # Ten minutes of the one handset is the most expensive thing in this script, so -Soak is
+      # permission and never an instruction: the reading's own duty judgement decides.
+      if ($Soak -gt 0 -and $soakOwed) {
+        Write-Host ''
+        Write-Host "the reading owes a soak, and -Soak $Soak was passed" -ForegroundColor Cyan
+        $soak = Invoke-Perf $window $Soak "soak $Soak min"
+        $readings += $soak
+        $soakTaken = $true
+      } elseif ($Soak -gt 0) {
+        Write-Host ''
+        Write-Host "   no soak taken: this build is at or under the soak-free duty (DEVICE.md), so ten minutes of the handset would answer a question already answered."
+        $notes += 'a soak was offered and not taken: the duty does not owe one'
+      } elseif ($soakOwed) {
+        Write-Host ''
+        Write-Host "   A SOAK IS OWED for this build. Rerun with: scripts\device.ps1 pass -Soak 10" -ForegroundColor Yellow
+        $notes += 'a soak is owed for this build and was not taken'
+      }
+
+      # --- the log, under the lease already held ---------------------------------------------
+      $errorLines = @(Get-LogErrors)
+      Write-Host ''
+      if ($errorLines.Count -eq 0) {
+        Write-Host "   log            no ERROR lines from this run" -ForegroundColor Green
+      } else {
+        Write-Host "   log            $($errorLines.Count) ERROR line(s) (POLISH.md asks for none)" -ForegroundColor Yellow
+        foreach ($l in @($errorLines | Select-Object -First 3)) { Write-Host "                  $l" -ForegroundColor Yellow }
+        if ($errorLines.Count -gt 3) { Write-Host "                  (+$($errorLines.Count - 3) more, scripts\device.ps1 log -Dump for all of them)" }
+      }
+
+      # --- one frame of what he would be looking at -------------------------------------------
+      $shotPath = Get-Screenshot "$stamp-pass"
+    } finally {
+      Invoke-Phone 'release' | Out-Null
+    }
+
+    # --- the record ---------------------------------------------------------------------------
+    $summary = "$($readings.Count) reading(s), $($errorLines.Count) ERROR line(s), soak $(if ($soakTaken) { 'taken' } elseif ($soakOwed) { 'OWED' } else { 'not owed' })"
+    Write-PhoneReading ("$(Get-Date -Format 'yyyy-MM-dd HH:mm')  pass     $summary$(if ($notes.Count) { '; ' + ($notes -join '; ') } else { '' })")
+
+    Write-PassRecord ([ordered]@{
+        slug       = $slug
+        utc        = [datetimeoffset]::UtcNow.ToString('o')
+        phone      = $Phone
+        head       = $head
+        stamp      = $buildStamp
+        version    = $version
+        tier       = "$($readings[0].Tier)"
+        readings   = @($readings | ForEach-Object {
+            [ordered]@{
+              label    = "$($_.Label)"
+              tier     = "$($_.Tier)"
+              found    = [bool]$_.Found
+              p50      = $_.p50
+              p90      = $_.p90
+              p95      = $_.p95
+              p99      = $_.p99
+              frames   = $_.Frames
+              thermal  = "$($_.Thermal)"
+              visuals  = "$($_.Visuals)"
+              verdict  = "$($_.Verdict)"
+              soakOwed = [bool]$_.SoakOwed
+              warmStart = [bool]$_.WarmStart
+            }
+          })
+        errors     = $errorLines.Count
+        errorLines = @($errorLines | Select-Object -First 3 | ForEach-Object { "$_" })
+        soakOwed   = [bool]$soakOwed
+        soakTaken  = [bool]$soakTaken
+        shot       = "$shotPath"
+        notes      = @($notes)
+      })
+
+    Write-Host ''
+    Write-Host "phone pass: $summary" -ForegroundColor Green
+    Write-Host "   The readings are in NOTES.md under '## Phone readings', stamped with the build they belong to."
   }
   default { throw "unknown action $Action. See the header of this script." }
 }
