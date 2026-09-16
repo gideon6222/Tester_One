@@ -6,7 +6,8 @@
   There is one phone and several sessions. Every action here claims it first through
   C:\dev\gamedev-notes\scripts\phone.ps1, and every action renews that claim as it runs, so
   two games cannot install over each other or read each other's logcat. When another game
-  holds it this script writes a `PHONE TEST OWED` line into NOTES.md and **exits 75** without
+  holds it this script writes a `PHONE TEST OWED` line into NOTES.md, puts this game on the
+  shared queue with what it came for, and **exits 75** without
   touching adb: that is not a failure to retry, it is an answer. Finish the desk pass and
   come back to the phone. End a phone pass with `release`; a forgotten lease expires in 20
   minutes on its own. Never call adb directly - a raw adb call is the one path the lease
@@ -39,10 +40,11 @@
   powershell -File C:\dev\gamedev-notes\scripts\phone.ps1 wants     # whose turn it is
   powershell -File C:\dev\gamedev-notes\scripts\phone.ps1 thermal   # how warm it already is
 
-  And when this script exits 75 because another game holds the handset, say what you came for
-  so the next session can see the queue rather than wait for Gideon to carry the message:
-
-  powershell -File C:\dev\gamedev-notes\scripts\phone.ps1 want -Owner <slug> -Note '<the ask>'
+  And when this script exits 75 because another game holds the handset, IT WRITES THIS GAME
+  ONTO THAT QUEUE ITSELF, with what it came for, beside the NOTES.md debt line. There is
+  nothing here for a session to remember: the board fills from the refusal that was already
+  happening. Measured over 2026-09-13 to 2026-09-15, when joining the queue was an
+  instruction in this header instead: 26 refusals in the shared log and not one want row.
 #>
 [CmdletBinding()]
 param(
@@ -160,6 +162,45 @@ function Write-PhoneDebt([string] $What) {
   $lead = if ($text.EndsWith("`n")) { '' } else { "`n" }
   [System.IO.File]::AppendAllText($notes, "$lead$line`n", (New-Object System.Text.UTF8Encoding($false)))
   Write-Host "   wrote to NOTES.md: $line"
+}
+
+## THE QUEUE ROW, WRITTEN BY THE CODE THAT WAS ALREADY RUNNING.
+##
+## `phone.ps1 wants` is the board a session reads before claiming, and `phone.ps1 want` is how
+## a game gets onto it. Both shipped on 2026-09-15 and both work. What did not work was the
+## part that asked a session to REMEMBER to join: the instruction sat in this script's own
+## header and in INDEX.md, in front of the session at the exact moment it applied, and the
+## compliance rate over 2026-09-13 to 2026-09-15 was 0 of 26 - twenty-six refusals in
+## C:\dev\.phone-log.tsv and not a single want row. That is not carelessness, it is what a
+## rule costs when the code that was already running could have done the thing itself.
+##
+## So the refusal writes the row. Everything a queue row needs is already here: the game is
+## this repo, $Phone is the handset, $act is what the pass came for, and $script:PhoneHolder
+## is who turned it away. ONE ROW PER REFUSAL - this runs from the single claim below and
+## never from the soak's renewals, which is what keeps a retried pass one row and not five.
+##
+## A WANT IS A NOTE AND NOTHING ELSE. It never feeds phone.ps1's fair share, which only a
+## `refused` line may trigger; writing wants automatically makes that separation matter far
+## more than it did while the board was empty, so phone-tests.ps1 asserts it as a pair rather
+## than trusting it.
+##
+## THE SAME SWALLOW-EVERYTHING GUARD AS Write-SharedPhoneLog, and for the harder reason: this
+## runs on the path whose whole product is an exit code. A queue that cannot be written to must
+## never turn "another game has the phone" into anything else, so every failure here is quiet
+## and $LASTEXITCODE is saved and restored around it. The exit 75 below is not this function's
+## to change.
+function Write-PhoneWant([string] $What) {
+  $keep = $LASTEXITCODE
+  try {
+    if (Test-Path -LiteralPath $phoneScript) {
+      $note = "$What, refused while $($script:PhoneHolder) held it"
+      $null = Native { & powershell -NoProfile -ExecutionPolicy Bypass -File $phoneScript want -Owner $slug -Phone $Phone -Note $note 2>&1 }
+      Write-Host "   put $slug on the queue for the $Phone phone: $note"
+    }
+  } catch {
+    # Deliberately empty. See the header above.
+  }
+  $global:LASTEXITCODE = $keep
 }
 
 ## ONE READING: reset SurfaceFlinger's stats, wait, and read back the percentiles for THIS
@@ -441,6 +482,8 @@ if ($act -ne 'release') {
   $minutes = if ($act -eq 'log' -and -not $Dump) { 60 } elseif ($act -eq 'perf' -and $Soak -gt 0) { $Soak + 5 } else { 20 }
   if ((Invoke-Phone 'claim' $minutes) -eq 75) {
     Write-PhoneDebt $act
+    # The queue joins itself. See Write-PhoneWant: neither call above may change the 75.
+    Write-PhoneWant $act
     exit 75
   }
 }
