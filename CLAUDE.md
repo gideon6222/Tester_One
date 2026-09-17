@@ -8,8 +8,10 @@ and an adb tool for the phone.
 @../gamedev-notes/INDEX.md
 
 **This is not a game.** It carries just enough playable content (a track, something to
-dodge, something to collect) for the tests to assert about. **Do not grow it into a game.**
-`C:\dev\gamedev-notes\scripts\new-game.ps1` copies it; grow the copy.
+dodge, something to collect) for the tests to assert about. **Do not grow it into a game:**
+the tests need something to assert about, they do not need a second game.
+`C:\dev\gamedev-notes\scripts\new-game.ps1` copies it; grow the copy. Nothing checks this
+one, so it is a preference held by whoever reads the diff.
 
 The engine traps, the invariants every game keeps, the toolchain paths and the export and
 signing rules are in `C:\dev\gamedev-notes\GODOT.md`. Read that before changing anything
@@ -77,11 +79,16 @@ any survive, so a new file that needs the game's name must use one of these exac
 
 ## Changing the template
 
-- A change here reaches only games copied after it. When a fix belongs in existing games
-  too, apply it there by hand and `/record-lesson`.
-- Every change must leave `scripts\check.ps1` green and CI green, because a fresh copy
-  proves itself with these before its first push.
-- Keep the placeholder game minimal. The tests need something to assert about; they do
-  not need a second game.
+- **When the change belongs in existing games too.** A change here reaches only games copied
+  after it, and the way it reaches the rest is **not** by editing their repos: commit it here
+  and the doctor's `template drift` check names the differing file in that game's own commit
+  gate until its session ports it or accepts the difference in `scripts\DIVERGENCE.md`. For a
+  change no drift line can express, raise it with
+  `C:\dev\gamedev-notes\scripts\bulletin.ps1 add`, which reaches sessions already running and
+  is acked per game. Receipt: the drift line in that game's next gate, or its ack under
+  `C:\dev\.studio\bulletins\<slug>.json`. Editing a game repo from here is how two copies of
+  one fix come to disagree, and it leaves no record that the fix arrived.
+- **When you have finished any change here.** `scripts\check.ps1` green, and CI green on the
+  push, because a fresh copy proves itself with these before its first push.
 - The remote is `github.com/gideon6222/Tester_One` for historical reasons. Nothing depends
   on the name.
