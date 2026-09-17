@@ -57,6 +57,15 @@ const SOURCE_FILES: Array[String] = [
 ## two are generated caches that change on every editor open.
 const SKIP_DIRS: Array[String] = ["build", ".godot", "android"]
 
+## Files that live under a source root but never go INTO the APK: the PowerShell
+## and shell tooling beside the game, prose, and the .uid sidecars Godot rewrites
+## on its own. A change to one of these is not a change to the build, so it must
+## not make the build "stale". Measured 2026-09-16: the studio's upkeep lane
+## carried the template's scripts\device.ps1 into three games and each game's
+## gate went red on this step alone, because a .ps1 was newer than the APK. The
+## export never packed that file in the first place.
+const SKIP_EXTENSIONS: Array[String] = ["ps1", "sh", "py", "md", "txt", "uid"]
+
 
 func _initialize() -> void:
 	var update := "--update" in OS.get_cmdline_user_args()
@@ -174,6 +183,8 @@ func _newest_under(path: String) -> Dictionary:
 		if int(deeper["time"]) > int(out["time"]):
 			out = deeper
 	for f in dir.get_files():
+		if f.get_extension() in SKIP_EXTENSIONS:
+			continue
 		var full := path + "/" + f
 		var mt := FileAccess.get_modified_time(full)
 		if mt > int(out["time"]):
