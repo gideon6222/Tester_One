@@ -54,15 +54,30 @@ try {
   $here = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path $MyInvocation.MyCommand.Path -Parent }
   $repo = Split-Path $here -Parent
   $repoFull = [System.IO.Path]::GetFullPath($repo)
-  $buildDir = Join-Path $repoFull 'build'
+  # A session may be running in a worktree (Claude Code puts one under .claude\worktrees\),
+  # and then this script's own folder is inside the worktree. The status line is about THE
+  # GAME, and the dashboard reads it from the main checkout's build\, so a worktree's status
+  # goes to the main checkout: git's common dir is the main repo's .git whatever checkout
+  # asked. Measured 2026-09-18 on Snowball, a session twenty minutes into a worktree while
+  # the site showed a two-day-old line from the chat before. The write-guard below is widened
+  # to the main checkout for the same reason and nothing else.
+  $mainRepo = $repoFull
+  try {
+    $common = (& git -C $repoFull rev-parse --path-format=absolute --git-common-dir 2>$null | Out-String).Trim()
+    if ($common -and (Split-Path $common -Leaf) -eq '.git') {
+      $cand = [System.IO.Path]::GetFullPath((Split-Path $common -Parent))
+      if ($cand -and (Test-Path -LiteralPath $cand)) { $mainRepo = $cand }
+    }
+  } catch { }
+  $buildDir = Join-Path $mainRepo 'build'
   $target = [System.IO.Path]::GetFullPath((Join-Path $buildDir 'session-status.json'))
 
   # Refuse to write outside the repo this script was run from. The path is built from
   # $PSScriptRoot and takes nothing from a parameter, so this cannot fire today; it is here
   # so that a later edit which does take a path has something already saying no.
-  $prefix = $repoFull.TrimEnd('\') + '\'
+  $prefix = $mainRepo.TrimEnd('\') + '\'
   if (-not $target.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
-    if (-not $Quiet) { Write-Output "status: refusing to write outside $repoFull" }
+    if (-not $Quiet) { Write-Output "status: refusing to write outside $mainRepo" }
     exit 0
   }
 
@@ -89,13 +104,18 @@ try {
   # for the same chat (local_<uuid>, the key of its record). Writing both here is what lets
   # the dashboard show "this game's chat" and wake it, with no one telling it which is
   # which. Empty when a person runs this from a plain terminal, which is fine.
+  # `dash` is the dashboard's own id for a session it started from the site
+  # (studio-dashboard\agent\start-session.ps1 mints it and hands it to the process as
+  # STUDIO_SESSION_ID), so a started session is linked to its record the moment it writes
+  # this line, whatever the CLI id turns out to be. Empty for a session he opened himself.
   $chat = [ordered]@{
     cli  = [string]$env:CLAUDE_CODE_SESSION_ID
     host = [string]$env:CLAUDE_CODE_HOST_SESSION_ID
+    dash = [string]$env:STUDIO_SESSION_ID
   }
 
   $record = [ordered]@{
-    slug    = Split-Path $repoFull -Leaf
+    slug    = Split-Path $mainRepo -Leaf
     utc     = [datetimeoffset]::UtcNow.ToString('o')
     state   = $State
     doing   = $Doing
